@@ -112,3 +112,4 @@ DEV=$(cd "$CHECKOUT" && "$LAUNCHER" --dev --version)
 [ "$DEV" = "checkout-launcher --dev" ]
 
 printf 'E2E_PASS: real ejected worktree switch, preservation, GC, and cwd guard\n'
+bash "$SCRIPT_DIR/test-feature-ledger-venv.sh"

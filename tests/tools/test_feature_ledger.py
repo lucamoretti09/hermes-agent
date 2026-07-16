@@ -17,7 +17,9 @@ fixture).
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -177,6 +179,22 @@ class TestRemoveFeature:
 
 
 class TestApplyLedger:
+    def test_different_venv_reexecutes_worker(self, monkeypatch, tmp_path):
+        python = tmp_path / "venv" / "bin" / "python"
+        python.parent.mkdir(parents=True)
+        python.write_text("binary")
+        completed = subprocess.CompletedProcess(
+            [str(python)], 0, stdout='{"test.feat": "refreshed"}', stderr=""
+        )
+        run = mock.Mock(return_value=completed)
+        monkeypatch.setattr(ld.subprocess, "run", run)
+
+        result = ld.apply_ledger(str(python))
+
+        assert result == {"test.feat": "refreshed"}
+        command = run.call_args.args[0]
+        assert command == [str(python), "-m", "tools.lazy_deps", "--apply-ledger-json"]
+
     def test_current_feature_returns_current(self, monkeypatch):
         monkeypatch.setattr(ld, "active_features", lambda: [])
         ld.record_feature("test.feat", via="ensure")

@@ -180,3 +180,4 @@ fi
 [ ! -e "$HERMES_HOME/versions/3.0.0.staging" ]
 
 printf 'E2E_PASS: real slot install/apply/rollback/tamper lifecycle\n'
+bash "$SCRIPT_DIR/test-feature-ledger-venv.sh"

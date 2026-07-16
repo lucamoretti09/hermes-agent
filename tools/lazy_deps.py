@@ -1151,13 +1151,34 @@ def apply_ledger(venv_python: str | None = None) -> dict[str, str]:
         ``"failed: <reason>"`` — install attempt failed
         ``"skipped: <reason>"`` — gated off (config, platform, etc.)
 
-    ``venv_python`` is accepted for API compatibility with the updater's
-    post-flip call (it may pass the new slot's Python path); the current
-    implementation runs ``ensure()`` against the active interpreter.
+    When ``venv_python`` names a different real interpreter, the ledger worker
+    is re-executed under it so source-worktree syncs install into the new venv
+    rather than whichever Hermes process initiated the sync.
 
     Never raises — install failures are recorded as ``"failed:"`` statuses
     so an update flip is never blocked by an optional extra.
     """
+    if venv_python:
+        target_python = Path(venv_python)
+        try:
+            same_interpreter = target_python.resolve() == Path(sys.executable).resolve()
+        except OSError:
+            same_interpreter = False
+        if target_python.exists() and not same_interpreter:
+            result = subprocess.run(
+                [str(target_python), "-m", "tools.lazy_deps", "--apply-ledger-json"],
+                capture_output=True,
+                text=True,
+                env={**os.environ, "HERMES_LEDGER_WORKER": "1"},
+            )
+            if result.returncode != 0:
+                return {"_worker": f"failed: {result.stderr.strip() or result.returncode}"}
+            try:
+                parsed = json.loads(result.stdout)
+            except json.JSONDecodeError as exc:
+                return {"_worker": f"failed: invalid JSON: {exc}"}
+            return parsed if isinstance(parsed, dict) else {"_worker": "failed: invalid result"}
+
     results: dict[str, str] = {}
     for feature in ledger_features():
         if feature not in LAZY_DEPS:
@@ -1190,3 +1211,15 @@ def apply_ledger(venv_python: str | None = None) -> dict[str, str]:
         except Exception as e:
             results[feature] = f"failed: {e}"
     return results
+
+
+def _main() -> int:
+    if sys.argv[1:] != ["--apply-ledger-json"]:
+        print("usage: python -m tools.lazy_deps --apply-ledger-json", file=sys.stderr)
+        return 2
+    print(json.dumps(apply_ledger(), sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
