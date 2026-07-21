@@ -8,12 +8,15 @@ import {
   $activeSessionId,
   $connection,
   $currentCwd,
+  $currentReasoningEffort,
   $selectedStoredSessionId,
   $unreadFinishedSessionIds,
   applyConfiguredDefaultProjectDir,
   mergeSessionPage,
+  normalizeComposerReasoningEffort,
   sessionPinId,
   setCurrentCwd,
+  setCurrentReasoningEffort,
   setSelectedStoredSessionId,
   workspaceCwdForNewSession
 } from './session'
@@ -82,6 +85,21 @@ describe('sessionPinId', () => {
     // After auto-compression the entry surfaces under a fresh tip id but keeps
     // the original root — pinning on the root keeps the pin stable.
     expect(sessionPinId(session({ id: 'tip', _lineage_root_id: 'root' }))).toBe('root')
+  })
+})
+
+describe('reasoning effort migration', () => {
+  it('maps supported values and disabled aliases to the gateway contract', () => {
+    expect(normalizeComposerReasoningEffort(' HIGH ')).toBe('high')
+    expect(normalizeComposerReasoningEffort(false)).toBe('none')
+    expect(normalizeComposerReasoningEffort('disabled')).toBe('none')
+  })
+
+  it('clears the legacy auto value before it can reach the gateway', () => {
+    setCurrentReasoningEffort('auto')
+
+    expect($currentReasoningEffort.get()).toBe('')
+    expect(window.localStorage.getItem('hermes.desktop.composer.reasoning-effort')).toBeNull()
   })
 })
 

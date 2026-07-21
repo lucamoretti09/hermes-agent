@@ -55,4 +55,19 @@ describe('model presets', () => {
     expect($currentFastMode.get()).toBe(true)
     expect(calls).toEqual([])
   })
+
+  it('drops a stale auto preset instead of sending it to the gateway', async () => {
+    const calls: { method: string; params?: Record<string, unknown> }[] = []
+    const request = async <T>(method: string, params?: Record<string, unknown>) => {
+      calls.push({ method, params })
+
+      return {} as T
+    }
+
+    setModelPreset('legacy', 'model', { effort: 'auto' })
+    await applyModelPreset({ effort: 'auto' }, { failMessage: 'x', request, sessionId: 's1' })
+
+    expect(getModelPreset('legacy', 'model')).toEqual({})
+    expect(calls).toEqual([])
+  })
 })

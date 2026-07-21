@@ -3,7 +3,7 @@ import { atom } from 'nanostores'
 import { persistString, storedString } from '@/lib/storage'
 
 import { notifyError } from './notifications'
-import { setCurrentFastMode, setCurrentReasoningEffort } from './session'
+import { normalizeComposerReasoningEffort, setCurrentFastMode, setCurrentReasoningEffort } from './session'
 import { sessionTileDelegate } from './session-states'
 
 const STORAGE_KEY = 'hermes.desktop.model-presets'
@@ -18,6 +18,20 @@ export interface ModelPreset {
 
 type RequestGateway = <T>(method: string, params?: Record<string, unknown>) => Promise<T>
 
+function normalizePreset(value: unknown): ModelPreset {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {}
+  }
+
+  const candidate = value as ModelPreset
+  const effort = normalizeComposerReasoningEffort(candidate.effort)
+
+  return {
+    ...(effort ? { effort } : {}),
+    ...(typeof candidate.fast === 'boolean' ? { fast: candidate.fast } : {})
+  }
+}
+
 /** Stable `provider::model` key (matches the visibility-store format). */
 export const modelPresetKey = (provider: string, model: string): string => `${provider}::${model}`
 
@@ -31,7 +45,11 @@ function load(): Record<string, ModelPreset> {
   try {
     const parsed = JSON.parse(raw)
 
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, ModelPreset>) : {}
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {}
+    }
+
+    return Object.fromEntries(Object.entries(parsed).map(([key, preset]) => [key, normalizePreset(preset)]))
   } catch {
     return {}
   }
@@ -46,7 +64,9 @@ export function getModelPreset(provider: string, model: string): ModelPreset {
 /** Merge a partial preset for one model and persist. */
 export function setModelPreset(provider: string, model: string, patch: ModelPreset): void {
   const key = modelPresetKey(provider, model)
-  const next = { ...$modelPresets.get(), [key]: { ...$modelPresets.get()[key], ...patch } }
+  const merged = { ...$modelPresets.get()[key], ...patch }
+  const normalized = normalizePreset(merged)
+  const next = { ...$modelPresets.get(), [key]: normalized }
 
   $modelPresets.set(next)
   persistString(STORAGE_KEY, JSON.stringify(next))
@@ -64,9 +84,11 @@ export async function applyModelPreset(
   { effort, fast }: ModelPreset,
   ctx: { failMessage: string; primary?: boolean; request: RequestGateway; sessionId: null | string }
 ): Promise<void> {
+  const normalizedEffort = effort === undefined ? undefined : normalizeComposerReasoningEffort(effort) || undefined
+
   if (ctx.primary ?? true) {
-    if (effort !== undefined) {
-      setCurrentReasoningEffort(effort)
+    if (normalizedEffort !== undefined) {
+      setCurrentReasoningEffort(normalizedEffort)
     }
 
     if (fast !== undefined) {
@@ -75,7 +97,7 @@ export async function applyModelPreset(
   } else if (ctx.sessionId) {
     sessionTileDelegate()?.updateSession(ctx.sessionId, state => ({
       ...state,
-      ...(effort !== undefined ? { reasoningEffort: effort } : {}),
+      ...(normalizedEffort !== undefined ? { reasoningEffort: normalizedEffort } : {}),
       ...(fast !== undefined ? { fast } : {})
     }))
   }
@@ -85,8 +107,8 @@ export async function applyModelPreset(
   }
 
   try {
-    if (effort !== undefined) {
-      await ctx.request('config.set', { key: 'reasoning', session_id: ctx.sessionId, value: effort })
+    if (normalizedEffort !== undefined) {
+      await ctx.request('config.set', { key: 'reasoning', session_id: ctx.sessionId, value: normalizedEffort })
     }
 
     if (fast !== undefined) {

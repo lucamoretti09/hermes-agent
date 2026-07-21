@@ -24,6 +24,38 @@ const COMPOSER_MODEL_SOURCE_KEY = 'hermes.desktop.composer.model-source'
 const COMPOSER_EFFORT_KEY = 'hermes.desktop.composer.reasoning-effort'
 const COMPOSER_FAST_KEY = 'hermes.desktop.composer.fast'
 
+const VALID_COMPOSER_REASONING_EFFORTS = new Set([
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'ultra'
+])
+
+/** Keep persisted/profile/runtime effort values inside the gateway contract.
+ * Older desktop builds stored `auto`; sending that stale value to config.set
+ * fails with "unknown reasoning value: auto". Empty means provider/default. */
+export function normalizeComposerReasoningEffort(value: unknown): string {
+  if (value === false) {
+    return 'none'
+  }
+
+  if (typeof value !== 'string') {
+    return ''
+  }
+
+  const effort = value.trim().toLowerCase()
+
+  if (effort === 'false' || effort === 'disabled') {
+    return 'none'
+  }
+
+  return VALID_COMPOSER_REASONING_EFFORTS.has(effort) ? effort : ''
+}
+
 // The last chat the user had open, so a relaunch lands back on it instead of an
 // empty new-chat. Stored (not runtime) id — the route is keyed by stored id.
 const LAST_SESSION_KEY = 'hermes.desktop.lastSessionId'
@@ -292,7 +324,7 @@ export const $resumeFailedSessionId = atom<string | null>(null)
 export const $resumeExhaustedSessionId = atom<string | null>(null)
 export const $currentModel = atom(storedString(COMPOSER_MODEL_KEY) ?? '')
 export const $currentProvider = atom(storedString(COMPOSER_PROVIDER_KEY) ?? '')
-export const $currentReasoningEffort = atom(storedString(COMPOSER_EFFORT_KEY) ?? '')
+export const $currentReasoningEffort = atom(normalizeComposerReasoningEffort(storedString(COMPOSER_EFFORT_KEY)))
 export const $currentServiceTier = atom('')
 export const $currentFastMode = atom(storedBoolean(COMPOSER_FAST_KEY, false))
 // Effective approval-bypass state mirrored from the gateway (session.info).
@@ -396,7 +428,8 @@ export const markComposerSelectionManual = (): void => {
 }
 
 export const setCurrentReasoningEffort = (next: Updater<string>) => {
-  updateAtom($currentReasoningEffort, next)
+  const value = typeof next === 'function' ? next($currentReasoningEffort.get()) : next
+  $currentReasoningEffort.set(normalizeComposerReasoningEffort(value))
   persistString(COMPOSER_EFFORT_KEY, $currentReasoningEffort.get() || null)
 }
 
