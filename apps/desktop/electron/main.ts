@@ -3467,13 +3467,21 @@ function resolveHermesBackend(backendArgs) {
     }
   }
 
-  // 3. Bootstrap-complete ACTIVE_HERMES_ROOT -- the canonical install at
+  // 3. Runnable ACTIVE_HERMES_ROOT -- the canonical install at
   //    %LOCALAPPDATA%\hermes\hermes-agent (Windows) or ~/.hermes/hermes-agent.
-  //    The bootstrap marker means install.ps1 stages finished and the user
-  //    completed initial configuration; we trust the install and go straight
-  //    to spawning hermes. Updates flow through the in-app update path
-  //    (applyUpdates -> git pull) or `hermes update` from the CLI.
-  if (isBootstrapComplete()) {
+  //    A completed desktop bootstrap marker is sufficient, but it is not
+  //    required: a CLI/source install can already have a healthy checkout +
+  //    venv without the desktop ever writing that marker. Prefer that verified
+  //    runtime over a PATH shim so a slow `hermes --version` probe cannot send
+  //    an otherwise healthy machine into the destructive repair/update path.
+  //    Updates remain owned by the in-app updater or `hermes update`.
+  const bootstrapComplete = isBootstrapComplete()
+
+  if (bootstrapComplete || isActiveRuntimeUsable()) {
+    if (!bootstrapComplete) {
+      rememberLog(`Using runnable Hermes install at ${ACTIVE_HERMES_ROOT} without a desktop bootstrap marker.`)
+    }
+
     return createActiveBackend(backendArgs)
   }
 

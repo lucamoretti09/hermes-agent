@@ -86,7 +86,7 @@ test('verifyHermesCli returns true when --version exits 0', () => {
 })
 
 test('verifyHermesCli swallows timeouts (does not throw)', () => {
-  // We can't easily provoke a real 5s hang in CI without slowing the
+  // We can't easily provoke a real bounded hang in CI without slowing the
   // suite, but we CAN confirm that an invocation that DOES throw
   // (because the binary is missing) returns false rather than
   // propagating. Same code path the timeout case takes.
