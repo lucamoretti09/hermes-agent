@@ -136,6 +136,37 @@ class TestRunConversationCodexPath:
         assert agent.context_compressor.last_total_tokens == 130
         assert agent.context_compressor.context_length == 200000
 
+    def test_explicit_context_override_survives_codex_usage_telemetry(self, monkeypatch):
+        def fake_run_turn(self, user_input: str, **kwargs):
+            return TurnResult(
+                final_text="done",
+                projected_messages=[{"role": "assistant", "content": "done"}],
+                turn_id="turn-context-override-1",
+                thread_id="thread-context-override-1",
+                token_usage_last={
+                    "totalTokens": 10,
+                    "inputTokens": 8,
+                    "outputTokens": 2,
+                },
+                model_context_window=272000,
+            )
+
+        monkeypatch.setattr(CodexAppServerSession, "run_turn", fake_run_turn)
+        monkeypatch.setattr(
+            CodexAppServerSession,
+            "ensure_started",
+            lambda self: "thread-context-override-1",
+        )
+        agent = _make_codex_agent(model="gpt-5.6-sol")
+        agent._config_context_length = 1_000_000
+        agent.context_compressor.context_length = 1_000_000
+
+        with patch.object(agent, "_spawn_background_review", return_value=None):
+            result = agent.run_conversation("hello")
+
+        assert result["completed"] is True
+        assert agent.context_compressor.context_length == 1_000_000
+
     def test_native_codex_compaction_updates_bookkeeping(self, monkeypatch):
         def fake_run_turn(self, user_input: str, **kwargs):
             return TurnResult(

@@ -123,9 +123,20 @@ def _record_codex_app_server_usage(agent, turn) -> dict[str, Any]:
     if compressor is not None:
         try:
             compressor.update_from_response(usage_dict)
-            context_window = getattr(turn, "model_context_window", None)
-            if isinstance(context_window, int) and context_window > 0:
-                compressor.context_length = context_window
+            configured_context_window = getattr(agent, "_config_context_length", None)
+            if (
+                isinstance(configured_context_window, int)
+                and configured_context_window > 0
+            ):
+                # An explicit model.context_length override is authoritative.
+                # Codex app-server usage telemetry includes the backend's
+                # advertised model_context_window; applying it unconditionally
+                # used to erase the user's configured window after every turn.
+                compressor.context_length = configured_context_window
+            else:
+                context_window = getattr(turn, "model_context_window", None)
+                if isinstance(context_window, int) and context_window > 0:
+                    compressor.context_length = context_window
         except Exception:
             logger.debug("codex app-server usage update failed", exc_info=True)
 
