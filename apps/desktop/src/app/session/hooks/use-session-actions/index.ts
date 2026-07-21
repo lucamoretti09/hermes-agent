@@ -295,6 +295,7 @@ export function useSessionActions({
       setActiveSessionId(null)
       activeSessionIdRef.current = null
       setSelectedStoredSessionId(null)
+      setPaneContent('workspace', { kind: 'chat', storedSessionId: null })
       selectedStoredSessionIdRef.current = null
       setMessages([])
       setCurrentUsage({
@@ -370,6 +371,8 @@ export function useSessionActions({
         resetViewSync()
         activeSessionIdRef.current = created.session_id
         selectedStoredSessionIdRef.current = stored
+        setPaneContent('workspace', { kind: 'chat', storedSessionId: stored })
+        bindPaneRuntime('workspace', created.session_id)
         ensureSessionState(created.session_id, stored)
 
         if (stored) {
@@ -515,6 +518,7 @@ export function useSessionActions({
       clearNotifications()
       resetViewSync()
       setSelectedStoredSessionId(storedSessionId)
+      setPaneContent('workspace', { kind: 'chat', storedSessionId })
       selectedStoredSessionIdRef.current = storedSessionId
       // Optimistically clear any prior resume-failure latch for this session:
       // we're attempting a fresh resume, so the self-heal in use-route-resume
