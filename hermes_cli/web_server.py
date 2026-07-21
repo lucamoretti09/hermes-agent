@@ -4060,18 +4060,18 @@ async def check_hermes_update(force: bool = False):
     ``POST /api/hermes/update`` actually runs ``hermes update``.
 
     Returns:
-        install_method: 'git' | 'pip' | 'docker' | 'nixos' | 'homebrew' | ...
+        install_method: 'git' | 'docker' | 'nixos' | 'unknown'
         current_version: installed Hermes version string
         behind: commits behind upstream (>=1), 0 if up to date,
-                -1 if behind by an unknown count (nix/pypi), or null if the
+                -1 if behind by an unknown count, or null if the
                 check could not run (offline, no remote, etc.)
         update_available: convenience bool (behind is non-zero and not null)
         can_apply: True when the dashboard's update button can apply it
-                   in place (git/pip); False for docker/nix/homebrew where the
+                   in place (git); False for other install methods where the
                    user must update out-of-band
         update_command: the recommended command for this install method
         message: human-readable guidance for non-applyable methods
-        commits: for git/pip installs that are behind, a list of the commits
+        commits: for git installs that are behind, a list of the commits
                  the local checkout is behind upstream by — each
                  {sha, summary, author, at}. Absent/empty otherwise. The
                  desktop's remote update overlay renders this as "what's
@@ -4108,7 +4108,7 @@ async def check_hermes_update(force: bool = False):
         payload["message"] = format_docker_update_message()
         return payload
 
-    # banner.check_for_updates() handles git / pypi / nix-revision paths and
+    # banner.check_for_updates() handles git / nix-revision paths and
     # caches the result for 6h. ``force`` busts the cache so the "Check now"
     # button reflects reality immediately.
     try:
