@@ -87,6 +87,13 @@ _REASONING_STALE_TIMEOUT_FLOORS: tuple[tuple[str, int], ...] = (
     # ships a slightly different naming shape.
     ("qwq-32b", 300),
     ("qwen3", 180),
+    # Dialagram / Alibaba Cloud Qwen-3.x series with hyphenated naming
+    # (qwen-3.5-plus-thinking, qwen-3.8-max-preview-thinking, etc.).
+    # The "qwen3" slug above does NOT match "qwen-3.8-..." because the
+    # hyphen between "qwen" and "3" breaks the start-of-slug anchor.
+    # These are reasoning/thinking models with extended TTFB; 600s floor
+    # matches deepseek-v4-pro / o1 class patience.
+    ("qwen-3", 600),
     # OpenAI o-series — known multi-minute TTFB.  Each variant
     # enumerated explicitly so bare ``o1`` doesn't over-match
     # ``olmo-1`` or hypothetical future community derivatives.

@@ -321,6 +321,26 @@ class TestDefaultContextLengths:
                     f"{model_id}: expected {expected_ctx}, got {actual}"
                 )
 
+    def test_qwen_38_explicit_provider_override_resolves_to_1m(self):
+        """Dialagram's Qwen 3.8 slugs preserve the configured 1M override.
+
+        The live provider catalog exposes the slugs but no context field, so
+        this is intentionally a configuration regression test rather than an
+        assertion that the provider independently advertised the capability.
+        """
+        assert DEFAULT_CONTEXT_LENGTHS["qwen-3.8"] == 1_048_576
+        assert DEFAULT_CONTEXT_LENGTHS["qwen3.8"] == 1_048_576
+
+        with patch("agent.model_metadata.fetch_model_metadata", return_value={}), \
+             patch("agent.model_metadata.fetch_endpoint_model_metadata", return_value={}), \
+             patch("agent.model_metadata.get_cached_context_length", return_value=None):
+            assert get_model_context_length(
+                "qwen-3.8-max-preview-thinking"
+            ) == 1_048_576
+            assert get_model_context_length(
+                "dialagram/qwen3.8-max-preview"
+            ) == 1_048_576
+
     def test_glm_52_context_1m(self):
         """GLM-5.2 must resolve to 1M, not the generic GLM fallback of 202K.
 

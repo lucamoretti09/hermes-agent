@@ -277,6 +277,11 @@ DEFAULT_CONTEXT_LENGTHS = {
     # Official docs: https://help.aliyun.com/zh/model-studio/developer-reference/
     "qwen3.6-plus": 1048576,      # 1M context (DashScope/Alibaba & OpenRouter)
     "qwen3.7-plus": 1048576,      # 1M context (DashScope/Alibaba)
+    # Dialagram exposes the Qwen 3.8 preview slugs but omits context metadata
+    # from its live /models catalog. These values preserve Chris' explicit 1M
+    # provider override; they are configuration, not a provider capability claim.
+    "qwen-3.8": 1048576,
+    "qwen3.8": 1048576,
     "qwen3-coder-plus": 1000000,  # 1M context
     "qwen3-coder": 262144,        # 256K context
     "qwen3-max": 262144,          # 256K context (qwen3-max-2026-01-23 snapshot, Coding Plan)

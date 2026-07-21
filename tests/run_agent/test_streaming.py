@@ -844,6 +844,49 @@ class TestStreamingFallback:
         # Connection cleanup should happen for each failed retry
         assert mock_close.call_count >= 2
 
+    @pytest.mark.parametrize("message", [
+        "Upstream stream disconnected before completion.",
+        "Stream interrupted by upstream proxy.",
+        "Stream error: connection ended unexpectedly.",
+    ])
+    @patch("run_agent.AIAgent._create_request_openai_client")
+    @patch("run_agent.AIAgent._close_request_openai_client")
+    def test_proxy_sse_stream_drop_phrases_retry_as_transient(
+        self, mock_close, mock_create, message
+    ):
+        """Dialagram-style SSE stream-drop events receive the retry budget."""
+        from run_agent import AIAgent
+        import httpx
+        from openai import APIError as OAIAPIError
+
+        sse_error = OAIAPIError(
+            message=message,
+            request=httpx.Request(
+                "POST", "https://provider.example/v1/chat/completions"
+            ),
+            body={"message": message},
+        )
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = sse_error
+        mock_create.return_value = mock_client
+
+        agent = AIAgent(
+            api_key="test-key",
+            base_url="https://provider.example/v1",
+            model="qwen-3.8-max-preview-thinking",
+            quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=True,
+        )
+        agent.api_mode = "chat_completions"
+        agent._interrupt_requested = False
+
+        with pytest.raises(OAIAPIError):
+            agent._interruptible_streaming_api_call({})
+
+        assert mock_client.chat.completions.create.call_count == 3
+        assert mock_close.call_count >= 2
+
     @patch("run_agent.AIAgent._create_request_openai_client")
     @patch("run_agent.AIAgent._close_request_openai_client")
     def test_sse_non_connection_error_propagates_immediately(self, mock_close, mock_create):

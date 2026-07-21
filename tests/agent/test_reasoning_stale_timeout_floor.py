@@ -59,6 +59,8 @@ import pytest
     ("qwen/qwq-32b-preview", 300.0),
     ("qwen/qwen3-235b-a22b-thinking", 180.0),
     ("qwen/qwen3-32b", 180.0),
+    ("qwen-3.8-max-preview-thinking", 600.0),
+    ("dialagram/qwen-3.5-plus-thinking", 600.0),
     # OpenAI o-series — each variant enumerated explicitly.
     # Longest match wins (o3-mini beats o3 on shared prefix).
     ("openai/o1", 600.0),

@@ -3412,6 +3412,9 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                                 "peer closed",
                                 "broken pipe",
                                 "upstream connect error",
+                                "upstream stream",
+                                "stream interrupted",
+                                "stream error",
                             )
                             _is_sse_conn_err = any(
                                 phrase in _err_lower_sse
