@@ -285,6 +285,36 @@ def test_supervisor_startup_reconcile_pid_reuse_guard(tmp_path, monkeypatch):
     assert not registry.exists()
 
 
+def test_supervisor_force_termination_uses_owned_process_tree(tmp_path, monkeypatch):
+    supervisor = HostSupervisor(
+        registry_path=tmp_path / "dashboard-compute-host.json",
+        argv=[sys.executable, "-c", ""],
+        autostart=False,
+    )
+    terminated: list[int] = []
+
+    class _FakeProcess:
+        pid = 4321
+
+        @staticmethod
+        def poll():
+            return None
+
+        @staticmethod
+        def wait(timeout=None):
+            return 0
+
+    monkeypatch.setattr(
+        supervisor,
+        "_terminate_pid",
+        lambda pid, **_kwargs: terminated.append(pid),
+    )
+
+    supervisor._terminate_process(_FakeProcess())
+
+    assert terminated == [4321]
+
+
 def test_supervisor_crash_emits_turn_error_and_respawns(tmp_path):
     script = tmp_path / "fake_host.py"
     script.write_text(

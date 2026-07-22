@@ -64,7 +64,11 @@ export function hasSessionInfoStatePatch(patch: SessionRuntimeStatePatch): boole
 // streaming text (still 30 fps of visible text growth). Big perceived
 // smoothness win on long messages with big trailing paragraphs; see
 // `scripts/profile-typing-lag.md` for the measurement work behind this.
-export const STREAM_DELTA_FLUSH_MS = 33
+// 30 fps looked fluid with one session, but every live session can enqueue a
+// separate markdown/state publish. At five sessions that meant up to 150 full
+// renderer updates per second and starved input on Windows. 20 fps remains
+// visually continuous while cutting worst-case render pressure by one third.
+export const STREAM_DELTA_FLUSH_MS = 50
 
 // Gateway/provider failures sometimes arrive as message.complete text instead
 // of an explicit error event. Treat matches as inline assistant errors so they

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from hermes_constants import get_hermes_home
+from hermes_cli._subprocess_compat import IS_WINDOWS, windows_hide_flags
 from tools.environments.local import hermes_subprocess_env
 
 logger = logging.getLogger(__name__)
@@ -46,19 +47,26 @@ MUTATOR_ROUTE_TABLE: dict[str, str] = {
 _REGISTRY_NAME = "dashboard-compute-host.json"
 _RESPAWN_WINDOW_SECS = 300.0
 _SHUTDOWN_TIMEOUT_SECS = 10.0
+_LOG_APPEND_LOCK = threading.Lock()
 
 
 def append_log_record(path: str | Path, record: str) -> None:
-    """Append one log record using O_APPEND and exactly one os.write call."""
+    """Append one complete UTF-8 record without same-process write races.
+
+    Windows does not guarantee that separate ``O_APPEND`` handles advance the
+    file pointer atomically. Serialising open/write/close prevents concurrent
+    dashboard workers from silently overwriting diagnostic records.
+    """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     text = record if record.endswith("\n") else f"{record}\n"
     data = text.encode("utf-8", errors="replace")
-    fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    try:
-        os.write(fd, data)
-    finally:
-        os.close(fd)
+    with _LOG_APPEND_LOCK:
+        fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            os.write(fd, data)
+        finally:
+            os.close(fd)
 
 
 def _repo_root() -> Path:
@@ -86,6 +94,15 @@ def _pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
     try:
+        import psutil
+
+        process = psutil.Process(pid)
+        return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+    except ImportError:
+        pass
+    except Exception:
+        return False
+    try:
         os.kill(pid, 0)
         return True
     except ProcessLookupError:
@@ -99,6 +116,13 @@ def _pid_alive(pid: int) -> bool:
 def _pid_command(pid: int) -> str:
     if pid <= 0:
         return ""
+    # Git-Bash ``ps`` cannot attest arbitrary native Windows PIDs. psutil can.
+    try:
+        import psutil
+
+        return " ".join(psutil.Process(pid).cmdline())
+    except Exception:
+        pass
     # Linux fast path.
     proc_cmdline = Path("/proc") / str(pid) / "cmdline"
     try:
@@ -170,6 +194,12 @@ class HostSupervisor:
 
     @property
     def pid(self) -> int:
+        try:
+            host_pid = int(self._hello.get("host_pid") or 0)
+        except (TypeError, ValueError):
+            host_pid = 0
+        if host_pid > 0:
+            return host_pid
         proc = self._proc
         return int(proc.pid or 0) if proc is not None else 0
 
@@ -315,9 +345,19 @@ class HostSupervisor:
         if self.env:
             env.update(self.env)
         env["HERMES_COMPUTE_HOST_HEARTBEAT_SECS"] = str(self.heartbeat_secs)
+        env.setdefault("PYTHONUTF8", "1")
+        env.setdefault("PYTHONIOENCODING", "utf-8")
         env.setdefault("PYTHONPATH", str(_repo_root()))
         if str(_repo_root()) not in env["PYTHONPATH"].split(os.pathsep):
             env["PYTHONPATH"] = str(_repo_root()) + os.pathsep + env["PYTHONPATH"]
+        process_group_options = (
+            {
+                "creationflags": windows_hide_flags()
+                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            }
+            if IS_WINDOWS
+            else {"start_new_session": True}
+        )
         proc = subprocess.Popen(
             self.argv,
             cwd=str(self.cwd),
@@ -326,8 +366,10 @@ class HostSupervisor:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
-            start_new_session=True,
+            **process_group_options,
         )
         self._proc = proc
         self._stdout_thread = _Thread(target=self._drain_stdout, args=(proc,), name="compute-host-stdout", daemon=True)
@@ -341,7 +383,12 @@ class HostSupervisor:
             raise RuntimeError(f"compute host did not send hello; stderr={self._stderr_tail[-5:]}")
         self._validate_hello()
         self._persist_registry()
-        logger.info("compute host started pid=%s reason=%s", proc.pid, reason)
+        logger.info(
+            "compute host started host_pid=%s launcher_pid=%s reason=%s",
+            self.pid,
+            proc.pid,
+            reason,
+        )
 
     def _validate_hello(self) -> None:
         hello = self._hello
@@ -522,6 +569,30 @@ class HostSupervisor:
 
     def _terminate_pid(self, pid: int, *, timeout: float = _SHUTDOWN_TIMEOUT_SECS) -> None:
         try:
+            import psutil
+
+            process = psutil.Process(pid)
+            descendants = process.children(recursive=True)
+            targets = [*reversed(descendants), process]
+            for target in targets:
+                try:
+                    target.terminate()
+                except psutil.Error:
+                    pass
+            _, alive = psutil.wait_procs(targets, timeout=timeout)
+            for target in alive:
+                try:
+                    target.kill()
+                except psutil.Error:
+                    pass
+            if alive:
+                psutil.wait_procs(alive, timeout=2)
+            return
+        except ImportError:
+            pass
+        except Exception:
+            logger.debug("psutil compute-host termination failed pid=%s", pid, exc_info=True)
+        try:
             os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
             return
@@ -543,16 +614,11 @@ class HostSupervisor:
     def _terminate_process(self, proc: subprocess.Popen[str]) -> None:
         if proc.poll() is not None:
             return
-        try:
-            proc.terminate()
-            proc.wait(timeout=_SHUTDOWN_TIMEOUT_SECS)
-            return
-        except Exception:
-            pass
-        try:
-            proc.kill()
-        except Exception:
-            pass
+        # Windows venv executables can be waiting launchers whose interpreter
+        # is a child process. Killing only the Popen handle leaves the actual
+        # compute host alive and holding memory/handles. The PID is owned by
+        # this supervisor, so terminate its complete descendant tree.
+        self._terminate_pid(int(proc.pid or 0))
         try:
             proc.wait(timeout=2)
         except Exception:

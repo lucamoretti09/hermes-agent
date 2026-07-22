@@ -702,7 +702,9 @@
     var(--arc-c1) 100%
   );
   background-size: 300% 300%;
-  animation: arc-border var(--arc-duration) linear infinite;
+  /* Keep the active-turn cue without repainting a large masked conic gradient
+     at display refresh rate. 48 steps over four seconds = 12 light repaints/s. */
+  animation: arc-border var(--arc-duration) steps(48, end) infinite;
 }
 
 /* Flip the arc's travel direction (e.g. the Nous Portal hero row). */

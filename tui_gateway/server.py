@@ -323,6 +323,8 @@ class _SlashWorker:
         # slash_worker runs the Hermes agent → needs provider credentials.
         # Tier-1 secrets (gateway/GitHub/infra) are still stripped (#29157).
         env = hermes_subprocess_env(inherit_credentials=True)
+        env.setdefault("PYTHONUTF8", "1")
+        env.setdefault("PYTHONIOENCODING", "utf-8")
         if profile_home:
             # Global-remote / multi-profile sessions: the worker must resolve
             # config/skills/state against the session's profile home, not the
@@ -343,6 +345,8 @@ class _SlashWorker:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
             cwd=os.getcwd(),
             env=env,
@@ -399,15 +403,34 @@ class _SlashWorker:
         proc = self.proc
         try:
             if proc.poll() is None:
-                proc.terminate()
                 try:
-                    proc.wait(timeout=1)
+                    import psutil
+
+                    parent = psutil.Process(proc.pid)
+                    targets = [*reversed(parent.children(recursive=True)), parent]
+                    for target in targets:
+                        try:
+                            target.terminate()
+                        except psutil.Error:
+                            pass
+                    _, alive = psutil.wait_procs(targets, timeout=1)
+                    for target in alive:
+                        try:
+                            target.kill()
+                        except psutil.Error:
+                            pass
+                    if alive:
+                        psutil.wait_procs(alive, timeout=1)
                 except Exception:
-                    proc.kill()
                     try:
-                        proc.wait(timeout=1)  # reap the zombie SIGKILL leaves behind
+                        proc.terminate()
+                        proc.wait(timeout=1)
                     except Exception:
-                        pass
+                        proc.kill()
+                try:
+                    proc.wait(timeout=1)  # reap the launcher after tree cleanup
+                except Exception:
+                    pass
         except Exception:
             try:
                 proc.kill()
@@ -1583,7 +1606,6 @@ def _start_agent_build(sid: str, session: dict) -> None:
             ready.set()
             return
 
-        worker = None
         notify_registered = False
         home_token = None
         profile_home = current.get("profile_home")
@@ -1637,16 +1659,6 @@ def _start_agent_build(sid: str, session: dict) -> None:
             # Baseline for the per-turn config sync; the profile home
             # override is still active here.
             current["config_model_seen"] = _config_model_target()
-
-            try:
-                worker = _SlashWorker(
-                    key,
-                    getattr(agent, "model", _resolve_model()),
-                    profile_home=current.get("profile_home"),
-                )
-                _attach_worker(sid, current, worker)
-            except Exception:
-                pass
 
             try:
                 from tools.approval import (
@@ -1707,9 +1719,8 @@ def _start_agent_build(sid: str, session: dict) -> None:
         finally:
             if home_token is not None:
                 reset_hermes_home_override(home_token)
-            # _attach_worker already closed the worker if this session was
-            # reaped mid-build; only the late notify registration can still
-            # leak (session.close unregistered before _build registered it).
+            # Only a late notify registration can leak when a session is
+            # reaped while its deferred agent build finishes.
             with _sessions_lock:
                 replaced = _sessions.get(sid) is not current
             if replaced and notify_registered:
@@ -3127,11 +3138,22 @@ def _tool_progress_enabled(sid: str) -> bool:
 
 def _restart_slash_worker(sid: str, session: dict):
     worker = session.get("slash_worker")
+    # A normal chat session never needs a second Hermes process. Workers are
+    # spawned lazily by slash.exec; model/compression sync is a no-op until a
+    # slash command has actually started one.
+    if worker is None:
+        return
     if worker:
         try:
             worker.close()
         except Exception:
             pass
+    # The turn-completion restart can race session.close. Do not allocate a
+    # replacement only for _attach_worker to close it again.
+    with _sessions_lock:
+        if _sessions.get(sid) is not session:
+            session["slash_worker"] = None
+            return
     try:
         new_worker = _SlashWorker(
             session["session_key"],
@@ -5215,19 +5237,10 @@ def _init_session(
             except Exception:
                 logger.debug("failed to persist resumed session cwd", exc_info=True)
     _register_session_cwd(_sessions[sid])
-    try:
-        _attach_worker(
-            sid,
-            _sessions[sid],
-            _SlashWorker(
-                key,
-                getattr(agent, "model", _resolve_model()),
-                profile_home=_sessions[sid].get("profile_home"),
-            ),
-        )
-    except Exception:
-        # Defer hard-failure to slash.exec; chat still works without slash worker.
-        _sessions[sid]["slash_worker"] = None
+    # Keep slash command execution lazy. Eagerly creating a full HermesCLI
+    # subprocess for every resumed session consumed ~60 MiB and ~200 handles
+    # per session even when no slash command was ever issued. slash.exec owns
+    # the on-demand creation path and preserves the same error handling.
     try:
         from tools.approval import register_gateway_notify, load_permanent_allowlist
 
