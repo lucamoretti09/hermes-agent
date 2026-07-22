@@ -198,7 +198,11 @@ export function DesktopOnboardingOverlay({ enabled, onCompleted, requestGateway 
   const [leaving, setLeaving] = useState(false)
 
   const finalizeOnboarding = () => {
-    if (leaving) {
+    if (
+      leaving ||
+      (onboarding.flow.status === 'confirming_model' &&
+        (onboarding.flow.saving || !onboarding.flow.modelPersisted || onboarding.flow.pendingModel !== null))
+    ) {
       return
     }
 

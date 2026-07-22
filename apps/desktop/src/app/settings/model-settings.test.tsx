@@ -289,6 +289,63 @@ describe('ModelSettings', () => {
     expect(screen.getByText('nous')).toBeTruthy()
   })
 
+  it('does not apply a guarded main model until the user confirms the pricing warning', async () => {
+    setModelAssignment
+      .mockResolvedValueOnce({
+        ok: false,
+        provider: 'nous',
+        model: 'hermes-4',
+        confirm_required: true,
+        confirm_message: 'This model has unusually high known pricing.'
+      })
+      .mockResolvedValueOnce({ ok: true, provider: 'nous', model: 'hermes-4', gateway_tools: [] })
+
+    await renderModelSettings()
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }))
+
+    expect(await screen.findByText('This model has unusually high known pricing.')).toBeTruthy()
+    expect(setModelAssignment).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+
+    await waitFor(() => expect(setModelAssignment).toHaveBeenCalledTimes(2))
+    expect(setModelAssignment).toHaveBeenNthCalledWith(2, {
+      confirm_expensive_model: true,
+      model: 'hermes-4',
+      provider: 'nous',
+      scope: 'main'
+    })
+  }, 30_000)
+
+  it('retries a guarded auxiliary assignment with explicit pricing confirmation', async () => {
+    setModelAssignment
+      .mockResolvedValueOnce({
+        confirm_message: 'Auxiliary model pricing requires confirmation.',
+        confirm_required: true,
+        model: 'hermes-4',
+        ok: false,
+        provider: 'nous'
+      })
+      .mockResolvedValueOnce({ model: 'hermes-4', ok: true, provider: 'nous' })
+
+    await renderModelSettings()
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Set to main' }))[0])
+
+    expect(await screen.findByText('Auxiliary model pricing requires confirmation.')).toBeTruthy()
+    expect(setModelAssignment).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+
+    await waitFor(() => expect(setModelAssignment).toHaveBeenCalledTimes(2))
+    expect(setModelAssignment).toHaveBeenNthCalledWith(2, {
+      confirm_expensive_model: true,
+      model: 'hermes-4',
+      provider: 'nous',
+      scope: 'auxiliary',
+      task: 'vision'
+    })
+  }, 30_000)
+
   it('shows a persistent banner when a loaded aux slot mismatches the main provider', async () => {
     getAuxiliaryModels.mockResolvedValueOnce({
       main: { provider: 'nous', model: 'hermes-4' },

@@ -685,7 +685,7 @@ export function usePromptActions({
 
   const restoreToMessage = useCallback(
     async (messageId: string, target?: RestoreMessageTarget) => {
-      const sessionId = activeSessionId || activeSessionIdRef.current
+      const sessionId = activeSessionIdRef.current
 
       if (!sessionId) {
         throw new Error('No active session to restore.')
@@ -726,12 +726,12 @@ export function usePromptActions({
         throw err
       }
     },
-    [activeSessionId, activeSessionIdRef, busyRef, submitRewindPrompt, updateSessionState]
+    [activeSessionIdRef, busyRef, submitRewindPrompt, updateSessionState]
   )
 
   const editMessage = useCallback(
     async (edited: AppendMessage) => {
-      const sessionId = activeSessionId || activeSessionIdRef.current
+      const sessionId = activeSessionIdRef.current
       const messages = $messages.get()
       const plan = sessionId ? planEdit(messages, edited) : null
 
@@ -782,7 +782,7 @@ export function usePromptActions({
         notifyError(surfaced, copy.editFailed)
       }
     },
-    [activeSessionId, activeSessionIdRef, busyRef, copy.editFailed, submitRewindPrompt, updateSessionState]
+    [activeSessionIdRef, busyRef, copy.editFailed, submitRewindPrompt, updateSessionState]
   )
 
   const handleThreadMessagesChange = useCallback(

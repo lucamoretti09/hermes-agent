@@ -3,6 +3,7 @@ import { useState } from 'react'
 
 import { ModelPickerDialog } from '@/components/model-picker'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ErrorIcon } from '@/components/ui/error-state'
 import { Input } from '@/components/ui/input'
 import { Loader } from '@/components/ui/loader'
@@ -12,6 +13,8 @@ import { ExternalLink, Loader2 } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import {
   cancelOnboardingFlow,
+  cancelOnboardingModelConfirmation,
+  confirmOnboardingExpensiveModel,
   copyDeviceCode,
   copyExternalCommand,
   type OnboardingContext,
@@ -298,7 +301,7 @@ function ConfirmingModelPanel({
         )}
       >
         <HackeryButton
-          disabled={flow.saving}
+          disabled={flow.saving || !flow.modelPersisted || flow.pendingModel !== null}
           label={<GlyphText text={scrambledBegin} />}
           loading={flow.saving}
           onClick={onBegin}
@@ -323,6 +326,17 @@ function ConfirmingModelPanel({
           setPickerOpen(false)
         }}
         open={pickerOpen}
+      />
+      <ConfirmDialog
+        busyLabel="Saving model"
+        confirmLabel="Use this model"
+        contentClassName="z-[1310]"
+        description={flow.confirmMessage ?? undefined}
+        doneLabel="Model saved"
+        onClose={cancelOnboardingModelConfirmation}
+        onConfirm={confirmOnboardingExpensiveModel}
+        open={flow.pendingModel !== null && flow.confirmMessage !== null}
+        title="Confirm model pricing"
       />
     </div>
   )

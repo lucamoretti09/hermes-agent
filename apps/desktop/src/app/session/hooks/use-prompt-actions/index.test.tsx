@@ -1,3 +1,4 @@
+import type { AppendMessage } from '@assistant-ui/react'
 import { act, cleanup, render, waitFor } from '@testing-library/react'
 import type { MutableRefObject } from 'react'
 import { useEffect, useRef } from 'react'
@@ -60,6 +61,8 @@ async function actRender(ui: React.ReactElement) {
 interface HarnessHandle {
   activeSessionIdRef: MutableRefObject<string | null>
   cancelRun: () => Promise<void>
+  editMessage: (edited: AppendMessage) => Promise<void>
+  reloadFromMessage: (parentId: string | null) => Promise<void>
   restoreToMessage: (messageId: string, target?: { text?: string; userOrdinal?: number | null }) => Promise<void>
   steerPrompt: (text: string) => Promise<boolean>
   submitText: (text: string, options?: SubmitTextOptions) => Promise<boolean>
@@ -153,25 +156,30 @@ function Harness({
     }
   })
 
+  const { cancelRun, editMessage, reloadFromMessage, restoreToMessage, steerPrompt, submitText } = actions
+
   useEffect(() => {
     onReady({
       activeSessionIdRef,
-      cancelRun: (...args: Parameters<typeof actions.cancelRun>) =>
-        act(async () => actions.cancelRun(...args)) as Promise<void>,
-      restoreToMessage: (...args: Parameters<typeof actions.restoreToMessage>) =>
-        act(async () => actions.restoreToMessage(...args)) as Promise<void>,
-      steerPrompt: (...args: Parameters<typeof actions.steerPrompt>) =>
-        act(async () => actions.steerPrompt(...args)) as Promise<boolean>,
-      submitText: (...args: Parameters<typeof actions.submitText>) =>
-        act(async () => actions.submitText(...args)) as Promise<boolean>
+      cancelRun: (...args: Parameters<typeof cancelRun>) => act(async () => cancelRun(...args)) as Promise<void>,
+      editMessage: (...args: Parameters<typeof editMessage>) => act(async () => editMessage(...args)) as Promise<void>,
+      reloadFromMessage: (...args: Parameters<typeof reloadFromMessage>) =>
+        act(async () => reloadFromMessage(...args)) as Promise<void>,
+      restoreToMessage: (...args: Parameters<typeof restoreToMessage>) =>
+        act(async () => restoreToMessage(...args)) as Promise<void>,
+      steerPrompt: (...args: Parameters<typeof steerPrompt>) =>
+        act(async () => steerPrompt(...args)) as Promise<boolean>,
+      submitText: (...args: Parameters<typeof submitText>) => act(async () => submitText(...args)) as Promise<boolean>
     })
   }, [
-    actions.cancelRun,
-    actions.restoreToMessage,
-    actions.steerPrompt,
-    actions.submitText,
     activeSessionIdRef,
-    onReady
+    cancelRun,
+    editMessage,
+    onReady,
+    reloadFromMessage,
+    restoreToMessage,
+    steerPrompt,
+    submitText
   ])
 
   return null
@@ -601,6 +609,93 @@ describe('usePromptActions submit / queue drain semantics', () => {
     expect($busy.get()).toBe(false)
   })
 
+  it('explicit-null-runtime resumes the queued stored session instead of falling back to the active session', async () => {
+    $busy.set(false)
+
+    const activeSessionIdRef: MutableRefObject<string | null> = { current: 'rt-session-b' }
+    const selectedStoredSessionIdRef: MutableRefObject<string | null> = { current: 'stored-session-b' }
+    const calls: { method: string; params?: Record<string, unknown> }[] = []
+    const updates: { sessionId: string; storedSessionId: null | string | undefined }[] = []
+
+    const requestGateway = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      calls.push({ method, params })
+
+      if (method === 'session.resume') {
+        return { session_id: 'rt-session-a-recovered' } as never
+      }
+
+      return {} as never
+    })
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        activeSessionId="rt-session-b"
+        activeSessionIdRef={activeSessionIdRef}
+        onReady={h => (handle = h)}
+        onUpdateState={(sessionId, storedSessionId) => updates.push({ sessionId, storedSessionId })}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+        selectedStoredSessionIdRef={selectedStoredSessionIdRef}
+      />
+    )
+
+    const accepted = await handle!.submitText('queued for stale session A', {
+      fromQueue: true,
+      sessionId: null,
+      storedSessionId: 'stored-session-a'
+    })
+
+    expect(accepted).toBe(true)
+    expect(calls.map(call => call.method)).toEqual(['session.resume', 'prompt.submit'])
+    expect(calls[0]?.params).toEqual({ session_id: 'stored-session-a', source: 'desktop' })
+    expect(calls[1]?.params).toMatchObject({
+      session_id: 'rt-session-a-recovered',
+      text: 'queued for stale session A'
+    })
+    expect(activeSessionIdRef.current).toBe('rt-session-b')
+    expect(
+      updates.some(update => update.sessionId === 'rt-session-b' && update.storedSessionId === 'stored-session-a')
+    ).toBe(false)
+  })
+
+  it('preserves an explicit null stored target instead of borrowing the visible stored session', async () => {
+    $busy.set(false)
+
+    const activeSessionIdRef: MutableRefObject<string | null> = { current: 'rt-session-b' }
+    const selectedStoredSessionIdRef: MutableRefObject<string | null> = { current: 'stored-session-b' }
+    const updates: { sessionId: string; storedSessionId: null | string | undefined }[] = []
+    const requestGateway = vi.fn(async () => ({}) as never)
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        activeSessionId="rt-session-b"
+        activeSessionIdRef={activeSessionIdRef}
+        onReady={h => (handle = h)}
+        onUpdateState={(sessionId, storedSessionId) => updates.push({ sessionId, storedSessionId })}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+        selectedStoredSessionIdRef={selectedStoredSessionIdRef}
+      />
+    )
+
+    expect(
+      await handle!.submitText('queued runtime without a stored owner', {
+        fromQueue: true,
+        sessionId: 'rt-session-a',
+        storedSessionId: null
+      })
+    ).toBe(true)
+    expect(requestGateway).toHaveBeenCalledWith(
+      'prompt.submit',
+      { session_id: 'rt-session-a', text: 'queued runtime without a stored owner' },
+      1_800_000
+    )
+    expect(updates.some(update => update.sessionId === 'rt-session-a' && update.storedSessionId === null)).toBe(true)
+    expect(updates.some(update => update.storedSessionId === 'stored-session-b')).toBe(false)
+  })
+
   it('a rejected fromQueue drain returns false (entry stays queued) and a later retry sends it', async () => {
     // A stale-session 404 must not strand the queued entry: submitPrompt returns
     // false on failure so the composer keeps it, and the edge-independent
@@ -728,6 +823,29 @@ describe('usePromptActions steerPrompt', () => {
     expect(requestGateway).not.toHaveBeenCalledWith('prompt.submit', expect.anything())
   })
 
+  it('reads the live session ref when an older steer callback survives a session switch', async () => {
+    const activeSessionIdRef: MutableRefObject<string | null> = { current: 'rt-session-a' }
+    const requestGateway = vi.fn(async () => ({ status: 'queued' }) as never)
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        activeSessionId="rt-session-a"
+        activeSessionIdRef={activeSessionIdRef}
+        onReady={h => (handle = h)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+      />
+    )
+
+    activeSessionIdRef.current = 'rt-session-b'
+    expect(await handle!.steerPrompt('follow the visible session')).toBe(true)
+    expect(requestGateway).toHaveBeenCalledWith('session.steer', {
+      session_id: 'rt-session-b',
+      text: 'follow the visible session'
+    })
+  })
+
   it('reports rejection (so the caller queues) when the gateway has no live tool window', async () => {
     const requestGateway = vi.fn(async () => ({ status: 'rejected' }) as never)
 
@@ -762,6 +880,87 @@ describe('usePromptActions steerPrompt', () => {
 
     expect(await handle!.steerPrompt('   ')).toBe(false)
     expect(requestGateway).not.toHaveBeenCalled()
+  })
+})
+
+describe('usePromptActions stale message actions', () => {
+  beforeEach(() => {
+    $busy.set(false)
+    $messages.set([
+      { id: 'u1', role: 'user', parts: [textPart('original prompt')] },
+      { id: 'a1', role: 'assistant', parts: [textPart('original answer')] }
+    ])
+  })
+
+  afterEach(() => {
+    cleanup()
+    $busy.set(false)
+    $messages.set([])
+    vi.restoreAllMocks()
+  })
+
+  it('reads the live session ref when an older reload callback survives a session switch', async () => {
+    const activeSessionIdRef: MutableRefObject<string | null> = { current: 'rt-session-a' }
+    const requestGateway = vi.fn(async () => ({}) as never)
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        activeSessionId="rt-session-a"
+        activeSessionIdRef={activeSessionIdRef}
+        onReady={h => (handle = h)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+        seedMessages={$messages.get()}
+      />
+    )
+
+    activeSessionIdRef.current = 'rt-session-b'
+    await handle!.reloadFromMessage('a1')
+
+    expect(requestGateway).toHaveBeenCalledWith(
+      'prompt.submit',
+      {
+        session_id: 'rt-session-b',
+        text: 'original prompt',
+        truncate_before_user_ordinal: 0
+      },
+      1_800_000
+    )
+  })
+
+  it('reads the live session ref when an older edit callback survives a session switch', async () => {
+    const activeSessionIdRef: MutableRefObject<string | null> = { current: 'rt-session-a' }
+    const requestGateway = vi.fn(async () => ({}) as never)
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        activeSessionId="rt-session-a"
+        activeSessionIdRef={activeSessionIdRef}
+        onReady={h => (handle = h)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+        seedMessages={$messages.get()}
+      />
+    )
+
+    activeSessionIdRef.current = 'rt-session-b'
+    await handle!.editMessage({
+      role: 'user',
+      sourceId: 'u1',
+      content: [{ type: 'text', text: 'edited prompt' }]
+    } as unknown as AppendMessage)
+
+    expect(requestGateway).toHaveBeenCalledWith(
+      'prompt.submit',
+      {
+        session_id: 'rt-session-b',
+        text: 'edited prompt',
+        truncate_before_user_ordinal: 0
+      },
+      1_800_000
+    )
   })
 })
 
@@ -813,6 +1012,36 @@ describe('usePromptActions restoreToMessage', () => {
     )
     expect((lastState.messages as { id: string }[]).map(m => m.id)).toEqual(['u1'])
     expect(lastState.busy).toBe(true)
+  })
+
+  it('reads the live session ref when an older restore callback survives a session switch', async () => {
+    const activeSessionIdRef: MutableRefObject<string | null> = { current: 'rt-session-a' }
+    const requestGateway = vi.fn(async () => ({}) as never)
+
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness
+        activeSessionId="rt-session-a"
+        activeSessionIdRef={activeSessionIdRef}
+        onReady={h => (handle = h)}
+        refreshSessions={async () => undefined}
+        requestGateway={requestGateway}
+        seedMessages={$messages.get()}
+      />
+    )
+
+    activeSessionIdRef.current = 'rt-session-b'
+    await handle!.restoreToMessage('u1')
+
+    expect(requestGateway).toHaveBeenCalledWith(
+      'prompt.submit',
+      {
+        session_id: 'rt-session-b',
+        text: 'first prompt',
+        truncate_before_user_ordinal: 0
+      },
+      1_800_000
+    )
   })
 
   it('rethrows gateway failures and clears the busy flags for the dialog to surface', async () => {

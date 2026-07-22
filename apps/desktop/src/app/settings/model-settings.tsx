@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -20,6 +21,8 @@ import type {
   AuxiliaryModelsResponse,
   MoaConfigResponse,
   MoaModelSlot,
+  ModelAssignmentRequest,
+  ModelAssignmentResponse,
   ModelOptionProvider,
   StaleAuxAssignment
 } from '@/hermes'
@@ -188,6 +191,16 @@ interface ModelSettingsProps {
   onMainModelChanged?: (provider: string, model: string) => void
 }
 
+type ModelAssignmentEffect =
+  | { epoch: number; kind: 'main'; model: string; provider: string }
+  | { clearStale: boolean; closeEditor: boolean; kind: 'auxiliary' }
+
+interface PendingModelAssignment {
+  effect: ModelAssignmentEffect
+  message: string
+  request: ModelAssignmentRequest
+}
+
 export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
   const { t } = useI18n()
   const m = t.settings.model
@@ -206,6 +219,7 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
   const { data: config } = useHermesConfigRecord()
   const setConfig = setHermesConfigCache
   const [applying, setApplying] = useState(false)
+  const [pendingModelAssignment, setPendingModelAssignment] = useState<PendingModelAssignment | null>(null)
   const [editingAuxTask, setEditingAuxTask] = useState<null | string>(null)
   const [auxDraft, setAuxDraft] = useState<{ model: string; provider: string }>({ model: '', provider: '' })
   // Aux slots reported stale by the backend immediately after a main-model
@@ -292,6 +306,7 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
     setSelectedProvider('')
     setSelectedModel('')
     setApiKeyDraft('')
+    setPendingModelAssignment(null)
     void refresh({ replaceSelection: true })
   })
 
@@ -614,6 +629,63 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
     }
   }, [selectedProvider, selectedProviderRow])
 
+  const finishModelAssignment = useCallback(
+    async (result: ModelAssignmentResponse, effect: ModelAssignmentEffect) => {
+      if (effect.kind === 'main') {
+        if (profileEpoch.current !== effect.epoch) {
+          return
+        }
+
+        const provider = result.provider || effect.provider
+        const model = result.model || effect.model
+        setMainModel({ provider, model })
+        setSwitchStaleAux(result.stale_aux ?? [])
+        onMainModelChanged?.(provider, model)
+      } else {
+        if (effect.closeEditor) {
+          setEditingAuxTask(null)
+        }
+
+        if (effect.clearStale) {
+          setSwitchStaleAux([])
+        }
+      }
+
+      await refresh()
+    },
+    [onMainModelChanged, refresh]
+  )
+
+  const runModelAssignment = useCallback(
+    async (request: ModelAssignmentRequest, effect: ModelAssignmentEffect, confirmed = false) => {
+      const result = await setModelAssignment({
+        ...request,
+        ...(confirmed && { confirm_expensive_model: true })
+      })
+
+      if (result.confirm_required) {
+        const message = result.confirm_message || result.warning || 'This model has unusually high known pricing.'
+
+        if (confirmed) {
+          throw new Error(message)
+        }
+
+        setPendingModelAssignment({ effect, message, request })
+
+        return false
+      }
+
+      if (result.ok === false) {
+        throw new Error(result.error || 'Could not save model assignment.')
+      }
+
+      await finishModelAssignment(result, effect)
+
+      return true
+    },
+    [finishModelAssignment]
+  )
+
   const applyMainModel = useCallback(async () => {
     if (!selectedProvider || !selectedModel) {
       return
@@ -624,24 +696,16 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
     setError('')
 
     try {
-      const result = await setModelAssignment({ model: selectedModel, provider: selectedProvider, scope: 'main' })
-
-      if (profileEpoch.current !== epoch) {
-        return
-      }
-
-      const provider = result.provider || selectedProvider
-      const model = result.model || selectedModel
-      setMainModel({ provider, model })
-      setSwitchStaleAux(result.stale_aux ?? [])
-      onMainModelChanged?.(provider, model)
-      await refresh()
+      await runModelAssignment(
+        { model: selectedModel, provider: selectedProvider, scope: 'main' },
+        { epoch, kind: 'main', model: selectedModel, provider: selectedProvider }
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setApplying(false)
     }
-  }, [onMainModelChanged, refresh, selectedModel, selectedProvider])
+  }, [runModelAssignment, selectedModel, selectedProvider])
 
   const setAuxiliaryToMain = useCallback(
     async (task: string) => {
@@ -653,15 +717,17 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
       setError('')
 
       try {
-        await setModelAssignment({ model: mainModel.model, provider: mainModel.provider, scope: 'auxiliary', task })
-        await refresh()
+        await runModelAssignment(
+          { model: mainModel.model, provider: mainModel.provider, scope: 'auxiliary', task },
+          { clearStale: false, closeEditor: false, kind: 'auxiliary' }
+        )
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err))
       } finally {
         setApplying(false)
       }
     },
-    [mainModel, refresh]
+    [mainModel, runModelAssignment]
   )
 
   const applyAuxiliaryDraft = useCallback(
@@ -674,16 +740,17 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
       setError('')
 
       try {
-        await setModelAssignment({ model: auxDraft.model, provider: auxDraft.provider, scope: 'auxiliary', task })
-        setEditingAuxTask(null)
-        await refresh()
+        await runModelAssignment(
+          { model: auxDraft.model, provider: auxDraft.provider, scope: 'auxiliary', task },
+          { clearStale: false, closeEditor: true, kind: 'auxiliary' }
+        )
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err))
       } finally {
         setApplying(false)
       }
     },
-    [auxDraft, refresh]
+    [auxDraft, runModelAssignment]
   )
 
   const beginAuxiliaryEdit = useCallback(
@@ -709,20 +776,36 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
     setError('')
 
     try {
-      await setModelAssignment({
-        model: mainModel.model,
-        provider: mainModel.provider,
-        scope: 'auxiliary',
-        task: '__reset__'
-      })
-      setSwitchStaleAux([])
-      await refresh()
+      await runModelAssignment(
+        {
+          model: mainModel.model,
+          provider: mainModel.provider,
+          scope: 'auxiliary',
+          task: '__reset__'
+        },
+        { clearStale: true, closeEditor: false, kind: 'auxiliary' }
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setApplying(false)
     }
-  }, [mainModel, refresh])
+  }, [mainModel, runModelAssignment])
+
+  const confirmPendingModelAssignment = useCallback(async () => {
+    if (!pendingModelAssignment) {
+      return
+    }
+
+    setApplying(true)
+    setError('')
+
+    try {
+      await runModelAssignment(pendingModelAssignment.request, pendingModelAssignment.effect, true)
+    } finally {
+      setApplying(false)
+    }
+  }, [pendingModelAssignment, runModelAssignment])
 
   if (loading && !mainModel) {
     return <ModelSettingsSkeleton />
@@ -1221,6 +1304,13 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
           </div>
         </section>
       )}
+      <ConfirmDialog
+        description={pendingModelAssignment?.message}
+        onClose={() => setPendingModelAssignment(null)}
+        onConfirm={confirmPendingModelAssignment}
+        open={pendingModelAssignment !== null}
+        title="Confirm model pricing"
+      />
     </div>
   )
 }

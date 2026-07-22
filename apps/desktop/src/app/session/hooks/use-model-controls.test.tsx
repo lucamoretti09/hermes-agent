@@ -1,5 +1,5 @@
 import { QueryClient } from '@tanstack/react-query'
-import { cleanup, render, renderHook } from '@testing-library/react'
+import { act, cleanup, render, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getGlobalModelInfo } from '@/hermes'
@@ -79,6 +79,7 @@ function Harness({
 
 describe('useModelControls', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     $activeSessionId.set(null)
     setCurrentModel('')
     setCurrentModelSource('')
@@ -156,6 +157,164 @@ describe('useModelControls', () => {
       value: 'claude-sonnet-4.6 --provider anthropic --session'
     })
     expect(requestGateway).not.toHaveBeenCalledWith('slash.exec', expect.anything())
+  })
+
+  it('rolls back a guarded switch and retries only after explicit expensive-model confirmation', async () => {
+    $activeSessionId.set('session-1')
+    setCurrentModel('safe-model')
+    setCurrentProvider('safe-provider')
+
+    const requestGateway = vi
+      .fn()
+      .mockResolvedValueOnce({
+        confirm_required: true,
+        confirm_message: 'This model has unusually high known pricing.'
+      })
+      .mockResolvedValueOnce({ key: 'model', value: 'expensive-model' })
+
+    let controls!: Controls
+
+    render(<Harness onReady={value => (controls = value)} requestGateway={requestGateway} />)
+
+    let accepted = true
+
+    await act(async () => {
+      accepted = await controls.selectModel({
+        model: 'expensive-model',
+        provider: 'paid-provider'
+      })
+    })
+
+    expect(accepted).toBe(false)
+
+    expect($currentModel.get()).toBe('safe-model')
+    expect($currentProvider.get()).toBe('safe-provider')
+    expect(controls.pendingModelConfirmation).toMatchObject({
+      message: 'This model has unusually high known pricing.',
+      selection: {
+        confirmExpensiveModel: true,
+        model: 'expensive-model',
+        provider: 'paid-provider'
+      }
+    })
+
+    await act(async () => controls.confirmPendingModelSelection())
+
+    expect(requestGateway).toHaveBeenNthCalledWith(2, 'config.set', {
+      confirm_expensive_model: true,
+      session_id: 'session-1',
+      key: 'model',
+      value: 'expensive-model --provider paid-provider --session'
+    })
+    expect($currentModel.get()).toBe('expensive-model')
+    expect($currentProvider.get()).toBe('paid-provider')
+    expect(notifyError).not.toHaveBeenCalled()
+  })
+
+  it('keeps the pricing confirmation pending when the backend repeats the guard after consent', async () => {
+    $activeSessionId.set('session-1')
+    setCurrentModel('safe-model')
+    setCurrentProvider('safe-provider')
+
+    const requestGateway = vi
+      .fn()
+      .mockResolvedValueOnce({
+        confirm_message: 'Initial high-price warning.',
+        confirm_required: true,
+        ok: false
+      })
+      .mockResolvedValueOnce({
+        confirm_message: 'The backend still requires confirmation.',
+        confirm_required: true,
+        ok: false
+      })
+
+    let controls!: Controls
+
+    render(<Harness onReady={value => (controls = value)} requestGateway={requestGateway} />)
+
+    await act(async () => {
+      await controls.selectModel({ model: 'expensive-model', provider: 'paid-provider' })
+    })
+
+    let confirmationError: unknown
+
+    await act(async () => {
+      try {
+        await controls.confirmPendingModelSelection()
+      } catch (error) {
+        confirmationError = error
+      }
+    })
+
+    expect(confirmationError).toEqual(new Error('Model switch failed'))
+
+    expect($currentModel.get()).toBe('safe-model')
+    expect($currentProvider.get()).toBe('safe-provider')
+    await vi.waitFor(() =>
+      expect(controls.pendingModelConfirmation?.message).toBe('The backend still requires confirmation.')
+    )
+    expect(requestGateway).toHaveBeenNthCalledWith(2, 'config.set', {
+      confirm_expensive_model: true,
+      key: 'model',
+      session_id: 'session-1',
+      value: 'expensive-model --provider paid-provider --session'
+    })
+  })
+
+  it('rolls back an explicit backend rejection that does not require confirmation', async () => {
+    $activeSessionId.set('session-1')
+    setCurrentModel('safe-model')
+    setCurrentProvider('safe-provider')
+    const requestGateway = vi.fn(async () => ({ error: 'Provider rejected the model.', ok: false }) as never)
+    let controls!: Controls
+
+    render(<Harness onReady={value => (controls = value)} requestGateway={requestGateway} />)
+
+    await expect(
+      controls.selectModel({
+        model: 'rejected-model',
+        provider: 'paid-provider'
+      })
+    ).resolves.toBe(false)
+
+    expect($currentModel.get()).toBe('safe-model')
+    expect($currentProvider.get()).toBe('safe-provider')
+    expect(notifyError).toHaveBeenCalledWith(expect.any(Error), 'Model switch failed')
+  })
+
+  it('serializes rapid switches and ignores a stale rejection before applying the latest choice', async () => {
+    $activeSessionId.set('session-1')
+    setCurrentModel('safe-model')
+    setCurrentProvider('safe-provider')
+    const first = deferred<{ error: string; ok: false }>()
+    const second = deferred<{ key: string; value: string }>()
+    const requestGateway = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    let controls!: Controls
+
+    render(<Harness onReady={value => (controls = value)} requestGateway={requestGateway} />)
+
+    const firstSwitch = controls.selectModel({ model: 'first-model', provider: 'first-provider' })
+
+    await vi.waitFor(() => expect(requestGateway).toHaveBeenCalledTimes(1))
+
+    const secondSwitch = controls.selectModel({ model: 'latest-model', provider: 'latest-provider' })
+
+    expect(requestGateway).toHaveBeenCalledTimes(1)
+
+    first.resolve({ error: 'The earlier model was rejected.', ok: false })
+    await expect(firstSwitch).resolves.toBe(false)
+    await vi.waitFor(() => expect(requestGateway).toHaveBeenCalledTimes(2))
+
+    expect($currentModel.get()).toBe('latest-model')
+    expect($currentProvider.get()).toBe('latest-provider')
+    expect(notifyError).not.toHaveBeenCalled()
+
+    second.resolve({ key: 'model', value: 'latest-model' })
+    await expect(secondSwitch).resolves.toBe(true)
+
+    expect($currentModel.get()).toBe('latest-model')
+    expect($currentProvider.get()).toBe('latest-provider')
   })
 
   it('session-scopes MoA preset selections so they cannot persist as the global gateway default', async () => {

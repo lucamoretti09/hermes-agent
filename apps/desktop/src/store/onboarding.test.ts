@@ -5,11 +5,15 @@ import type { OAuthProvider } from '@/types/hermes'
 
 import {
   $desktopOnboarding,
+  cancelOnboardingModelConfirmation,
+  confirmOnboardingExpensiveModel,
+  confirmOnboardingModel,
   type DesktopOnboardingState,
   type OnboardingContext,
   refreshOnboarding,
   requestDesktopOnboarding,
   saveOnboardingLocalEndpoint,
+  setOnboardingModel,
   submitOnboardingCode
 } from './onboarding'
 
@@ -364,6 +368,221 @@ describe('OAuth onboarding', () => {
     expect(optionsIndex).toBeGreaterThanOrEqual(0)
     expect(recommendedIndex).toBeGreaterThan(optionsIndex)
     expect(setIndex).toBeGreaterThan(recommendedIndex)
+  })
+
+  it('blocks onboarding completion until a guarded recommended model is explicitly confirmed', async () => {
+    const model = 'nous/expensive-recommended-model'
+    const modelRequests: Record<string, unknown>[] = []
+
+    installApiMock(async ({ body, path }: { body?: Record<string, unknown>; path: string }) => {
+      if (path === '/api/providers/oauth/nous/submit') {
+        return { ok: true, status: 'approved' }
+      }
+
+      if (path.startsWith('/api/model/options')) {
+        return { providers: [{ models: [model], name: 'Nous Portal', slug: 'nous' }] }
+      }
+
+      if (path.startsWith('/api/model/recommended-default?')) {
+        return { free_tier: false, model, provider: 'nous' }
+      }
+
+      if (path === '/api/model/set') {
+        modelRequests.push(body ?? {})
+
+        if (body?.confirm_expensive_model === true) {
+          return { gateway_tools: [], model, ok: true, provider: 'nous', scope: 'main' }
+        }
+
+        return {
+          confirm_message: 'This recommended model has unusually high known pricing.',
+          confirm_required: true,
+          model,
+          ok: false,
+          provider: 'nous',
+          scope: 'main'
+        }
+      }
+
+      throw new Error(`unexpected api path: ${path}`)
+    })
+
+    const requestGateway: OnboardingContext['requestGateway'] = async (method, params) => {
+      if (method === 'reload.env') {
+        return {} as never
+      }
+
+      if (method === 'setup.status') {
+        return { provider_configured: true } as never
+      }
+
+      if (method === 'setup.runtime_check') {
+        expect(params).toEqual({ provider: 'nous' })
+
+        return { ok: true } as never
+      }
+
+      throw new Error(`unexpected gateway method: ${method}`)
+    }
+
+    const onCompleted = vi.fn()
+    const ctx = { onCompleted, requestGateway }
+
+    $desktopOnboarding.set(
+      baseState({
+        flow: {
+          code: 'fresh-code',
+          provider: provider('nous', 'Nous Portal'),
+          start: {
+            auth_url: 'https://portal.example/auth',
+            expires_in: 600,
+            flow: 'pkce',
+            session_id: 'portal-session'
+          },
+          status: 'awaiting_user'
+        },
+        requested: true
+      })
+    )
+
+    await submitOnboardingCode(ctx)
+
+    let flow = $desktopOnboarding.get().flow
+    expect(flow.status).toBe('confirming_model')
+
+    if (flow.status === 'confirming_model') {
+      expect(flow.currentModel).toBe(model)
+      expect(flow.modelPersisted).toBe(false)
+      expect(flow.pendingModel).toBe(model)
+      expect(flow.confirmMessage).toBe('This recommended model has unusually high known pricing.')
+    }
+
+    confirmOnboardingModel(ctx)
+    expect(onCompleted).not.toHaveBeenCalled()
+    expect($desktopOnboarding.get().configured).toBe(false)
+
+    await confirmOnboardingExpensiveModel()
+
+    flow = $desktopOnboarding.get().flow
+    expect(flow.status).toBe('confirming_model')
+
+    if (flow.status === 'confirming_model') {
+      expect(flow.modelPersisted).toBe(true)
+      expect(flow.pendingModel).toBeNull()
+      expect(flow.confirmMessage).toBeNull()
+    }
+
+    confirmOnboardingModel(ctx)
+    expect(onCompleted).toHaveBeenCalledTimes(1)
+    expect($desktopOnboarding.get().configured).toBe(true)
+    expect(modelRequests).toHaveLength(2)
+    expect(modelRequests[1]).toMatchObject({ confirm_expensive_model: true })
+  }, 15_000)
+
+  it('keeps an expensive model pending until the backend confirmation is accepted', async () => {
+    const safeModel = 'openai/gpt-5-mini'
+    const expensiveModel = 'openai/gpt-5.6-pro'
+    const requests: Record<string, unknown>[] = []
+
+    installApiMock(async ({ body, path }: { body?: Record<string, unknown>; path: string }) => {
+      expect(path).toBe('/api/model/set')
+      requests.push(body ?? {})
+      expect(body).toMatchObject({
+        model: expensiveModel,
+        provider: 'openai',
+        scope: 'main'
+      })
+
+      if (body?.confirm_expensive_model === true) {
+        return {
+          model: expensiveModel,
+          ok: true,
+          provider: 'openai',
+          scope: 'main'
+        }
+      }
+
+      return {
+        confirm_message: 'This model can incur high usage costs.',
+        confirm_required: true,
+        model: expensiveModel,
+        ok: false,
+        provider: 'openai',
+        scope: 'main'
+      }
+    })
+
+    $desktopOnboarding.set(
+      baseState({
+        flow: {
+          confirmMessage: null,
+          currentModel: safeModel,
+          label: 'OpenAI',
+          modelPersisted: true,
+          pendingModel: null,
+          providerSlug: 'openai',
+          saving: false,
+          status: 'confirming_model'
+        }
+      })
+    )
+
+    await setOnboardingModel(expensiveModel)
+
+    const flow = $desktopOnboarding.get().flow
+    expect(flow.status).toBe('confirming_model')
+
+    if (flow.status === 'confirming_model') {
+      expect(flow.currentModel).toBe(safeModel)
+      expect(flow.modelPersisted).toBe(true)
+      expect(flow.pendingModel).toBe(expensiveModel)
+      expect(flow.confirmMessage).toBe('This model can incur high usage costs.')
+    }
+
+    await confirmOnboardingExpensiveModel()
+
+    const confirmed = $desktopOnboarding.get().flow
+    expect(confirmed.status).toBe('confirming_model')
+
+    if (confirmed.status === 'confirming_model') {
+      expect(confirmed.currentModel).toBe(expensiveModel)
+      expect(confirmed.modelPersisted).toBe(true)
+      expect(confirmed.pendingModel).toBeNull()
+      expect(confirmed.confirmMessage).toBeNull()
+    }
+
+    expect(requests).toHaveLength(2)
+    expect(requests[0]).not.toHaveProperty('confirm_expensive_model')
+    expect(requests[1]).toMatchObject({ confirm_expensive_model: true })
+  }, 15_000)
+
+  it('cancels a guarded model without discarding an already persisted onboarding choice', () => {
+    $desktopOnboarding.set(
+      baseState({
+        flow: {
+          confirmMessage: 'High-price warning.',
+          currentModel: 'safe-model',
+          label: 'OpenAI',
+          modelPersisted: true,
+          pendingModel: 'expensive-model',
+          providerSlug: 'openai',
+          saving: false,
+          status: 'confirming_model'
+        }
+      })
+    )
+
+    cancelOnboardingModelConfirmation()
+
+    const flow = $desktopOnboarding.get().flow
+    expect(flow.status).toBe('confirming_model')
+
+    if (flow.status === 'confirming_model') {
+      expect(flow.currentModel).toBe('safe-model')
+      expect(flow.modelPersisted).toBe(true)
+      expect(flow.pendingModel).toBeNull()
+      expect(flow.confirmMessage).toBeNull()
+    }
   })
 })
 

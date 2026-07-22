@@ -21,6 +21,7 @@ import { NotificationStack } from '@/components/notifications'
 import { DesktopOnboardingOverlay } from '@/components/onboarding'
 import { FloatingPet } from '@/components/pet/floating-pet'
 import { RemoteDisplayBanner } from '@/components/remote-display-banner'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { emitGatewayEvent } from '@/contrib/events'
 import { getSessionMessages, triggerCronJob } from '@/hermes'
 import { type ChatMessage, chatMessageText, preserveLocalAssistantErrors, toChatMessages } from '@/lib/chat-messages'
@@ -237,7 +238,14 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     refreshProjectBranch
   })
 
-  const { refreshCurrentModel, selectModel, updateModelOptionsCache } = useModelControls({
+  const {
+    cancelModelConfirmation,
+    confirmPendingModelSelection,
+    pendingModelConfirmation,
+    refreshCurrentModel,
+    selectModel,
+    updateModelOptionsCache
+  } = useModelControls({
     queryClient,
     requestGateway
   })
@@ -894,6 +902,13 @@ export function ContribWiring({ children }: { children: ReactNode }) {
         />
       )}
       <ModelPickerOverlay gateway={gatewayRef.current || undefined} onSelect={selectModel} />
+      <ConfirmDialog
+        description={pendingModelConfirmation?.message}
+        onClose={cancelModelConfirmation}
+        onConfirm={confirmPendingModelSelection}
+        open={pendingModelConfirmation !== null}
+        title="Confirm model pricing"
+      />
       <SessionPickerOverlay onResume={resumeSession} />
       <ModelVisibilityOverlay gateway={gatewayRef.current || undefined} onOpenProviders={openProviderSettings} />
       <UpdatesOverlay />

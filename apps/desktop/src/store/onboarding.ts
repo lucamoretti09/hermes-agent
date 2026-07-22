@@ -37,8 +37,11 @@ export type OnboardingFlow =
       // via /api/model/set). The change-model UI uses the existing
       // ModelPickerDialog, which fetches its own model list from
       // /api/model/options — no need to cache the list here.
+      confirmMessage: null | string
       currentModel: string
       label: string
+      modelPersisted: boolean
+      pendingModel: null | string
       providerSlug: string
       saving: boolean
       status: 'confirming_model'
@@ -311,6 +314,9 @@ async function completeWithModelConfirm(
   await ctx.requestGateway('reload.env').catch(() => undefined)
 
   const defaults = await fetchProviderDefaultModel(preferredSlugs)
+  let confirmMessage: null | string = null
+  let modelPersisted = false
+  let pendingModel: null | string = null
 
   if (defaults) {
     // Persist the chosen provider/model before the runtime gate so a stale
@@ -323,10 +329,19 @@ async function completeWithModelConfirm(
         model: defaults.defaultModel
       })
 
-      notifyGatewayTools(res.gateway_tools)
-    } catch {
+      if (res.confirm_required) {
+        confirmMessage = res.confirm_message?.trim() || 'This model may incur high usage costs.'
+        pendingModel = defaults.defaultModel
+      } else if (!res.ok) {
+        throw new Error(res.error?.trim() || res.warning?.trim() || 'Hermes did not save the default model.')
+      } else {
+        modelPersisted = true
+        notifyGatewayTools(res.gateway_tools)
+      }
+    } catch (error) {
       // Persistence failed — still run the scoped runtime check below and
       // show the confirm card so the user can pick something explicitly.
+      notifyError(error, 'Could not save default model')
     }
   }
 
@@ -350,8 +365,11 @@ async function completeWithModelConfirm(
   setFlow({
     status: 'confirming_model',
     providerSlug: defaults.providerSlug,
+    confirmMessage,
     currentModel: defaults.defaultModel,
     label: providerLabel,
+    modelPersisted,
+    pendingModel,
     saving: false
   })
 }
@@ -858,8 +876,9 @@ export async function saveOnboardingLocalEndpoint(baseUrl: string, apiKey: strin
   }
 }
 
-// User picked a different model from the dropdown on the confirm card.
-// Persists immediately so the displayed value is always what's on disk.
+// User picked a different model from the dropdown on the confirm card. The
+// existing persisted model remains visible until the backend accepts the new
+// assignment; guarded high-cost models stay pending until explicit consent.
 export async function setOnboardingModel(model: string) {
   const { flow } = $desktopOnboarding.get()
 
@@ -867,29 +886,124 @@ export async function setOnboardingModel(model: string) {
     return
   }
 
-  // Optimistic update so the dropdown feels instant; revert on failure.
-  const previous = flow.currentModel
-  setFlow({ ...flow, currentModel: model, saving: true })
+  const previous = flow
+  setFlow({ ...flow, saving: true })
 
   try {
-    await setModelAssignment({
+    const res = await setModelAssignment({
       scope: 'main',
       provider: flow.providerSlug,
       model
     })
+
     const current = $desktopOnboarding.get().flow
 
-    if (current.status === 'confirming_model') {
-      setFlow({ ...current, currentModel: model, saving: false })
+    if (current.status !== 'confirming_model' || current.providerSlug !== flow.providerSlug) {
+      return
     }
+
+    if (res.confirm_required) {
+      setFlow({
+        ...current,
+        confirmMessage: res.confirm_message?.trim() || 'This model may incur high usage costs.',
+        pendingModel: model,
+        saving: false
+      })
+
+      return
+    }
+
+    if (!res.ok) {
+      throw new Error(res.error?.trim() || res.warning?.trim() || 'Hermes did not save the model.')
+    }
+
+    notifyGatewayTools(res.gateway_tools)
+    setFlow({
+      ...current,
+      confirmMessage: null,
+      currentModel: model,
+      modelPersisted: true,
+      pendingModel: null,
+      saving: false
+    })
   } catch (error) {
     notifyError(error, 'Could not change model')
     const current = $desktopOnboarding.get().flow
 
-    if (current.status === 'confirming_model') {
-      setFlow({ ...current, currentModel: previous, saving: false })
+    if (current.status === 'confirming_model' && current.providerSlug === previous.providerSlug) {
+      setFlow({ ...previous, saving: false })
     }
   }
+}
+
+export async function confirmOnboardingExpensiveModel() {
+  const { flow } = $desktopOnboarding.get()
+
+  if (flow.status !== 'confirming_model' || !flow.pendingModel || flow.saving) {
+    return
+  }
+
+  const pendingModel = flow.pendingModel
+  setFlow({ ...flow, saving: true })
+
+  try {
+    const res = await setModelAssignment({
+      confirm_expensive_model: true,
+      model: pendingModel,
+      provider: flow.providerSlug,
+      scope: 'main'
+    })
+
+    if (res.confirm_required) {
+      throw new Error(res.confirm_message?.trim() || 'Hermes still requires model pricing confirmation.')
+    }
+
+    if (!res.ok) {
+      throw new Error(res.error?.trim() || res.warning?.trim() || 'Hermes did not save the model.')
+    }
+
+    notifyGatewayTools(res.gateway_tools)
+    const current = $desktopOnboarding.get().flow
+
+    if (
+      current.status === 'confirming_model' &&
+      current.providerSlug === flow.providerSlug &&
+      current.pendingModel === pendingModel
+    ) {
+      setFlow({
+        ...current,
+        confirmMessage: null,
+        currentModel: pendingModel,
+        modelPersisted: true,
+        pendingModel: null,
+        saving: false
+      })
+    }
+  } catch (error) {
+    const current = $desktopOnboarding.get().flow
+
+    if (current.status === 'confirming_model' && current.providerSlug === flow.providerSlug) {
+      setFlow({ ...current, saving: false })
+    }
+
+    throw error
+  }
+}
+
+export function cancelOnboardingModelConfirmation() {
+  const { flow } = $desktopOnboarding.get()
+
+  if (flow.status !== 'confirming_model' || !flow.pendingModel) {
+    return
+  }
+
+  if (!flow.modelPersisted) {
+    cancelOnboardingFlow()
+
+    return
+  }
+
+  setFlow({ ...flow, confirmMessage: null, pendingModel: null, saving: false })
 }
 
 // User clicked "Start chatting" on the confirm card. Finalizes onboarding
@@ -899,7 +1013,7 @@ export async function setOnboardingModel(model: string) {
 export function confirmOnboardingModel(ctx: OnboardingContext) {
   const { flow } = $desktopOnboarding.get()
 
-  if (flow.status !== 'confirming_model') {
+  if (flow.status !== 'confirming_model' || flow.saving || !flow.modelPersisted || flow.pendingModel !== null) {
     return
   }
 

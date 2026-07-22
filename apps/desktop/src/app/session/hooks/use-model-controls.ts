@@ -1,5 +1,5 @@
 import { type QueryClient } from '@tanstack/react-query'
-import { useCallback, useRef } from 'react'
+import { useCallback, useRef, useState } from 'react'
 
 import type { ModelSelection } from '@/app/shell/model-menu-panel'
 import { getGlobalModelInfo } from '@/hermes'
@@ -25,10 +25,26 @@ interface ModelControlsOptions {
   requestGateway: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>
 }
 
+interface ModelSwitchResponse {
+  confirm_message?: string
+  confirm_required?: boolean
+  error?: string
+  ok?: boolean
+  warning?: string
+}
+
+export interface PendingModelConfirmation {
+  message: string
+  selection: ModelSelection
+}
+
 export function useModelControls({ queryClient, requestGateway }: ModelControlsOptions) {
   const { t } = useI18n()
   const copy = t.desktop
+  const modelSwitchEpochsRef = useRef(new Map<string, number>())
+  const modelSwitchQueuesRef = useRef(new Map<string, Promise<void>>())
   const profileRefreshEpochRef = useRef(0)
+  const [pendingModelConfirmation, setPendingModelConfirmation] = useState<PendingModelConfirmation | null>(null)
 
   // All callbacks here read reactive session state from the store (.get())
   // rather than capturing it as a prop. The actions bag in wiring.tsx mutates
@@ -160,23 +176,7 @@ export function useModelControls({ queryClient, requestGateway }: ModelControlsO
 
       updateModelOptionsCache(liveSessionId, selection.provider, selection.model, touchesPrimary && !liveSessionId)
 
-      // No live session yet: the pick is pure UI state. session.create reads
-      // $currentModel/$currentProvider and applies it as that session's override.
-      if (!liveSessionId) {
-        return true
-      }
-
-      try {
-        await requestGateway('config.set', {
-          session_id: liveSessionId,
-          key: 'model',
-          value: `${selection.model} --provider ${selection.provider} --session`
-        })
-
-        void queryClient.invalidateQueries({ queryKey: ['model-options', liveSessionId] })
-
-        return true
-      } catch (err) {
+      const rollback = () => {
         if (touchesPrimary) {
           setCurrentModel(prevModel)
           setCurrentProvider(prevProvider)
@@ -190,13 +190,106 @@ export function useModelControls({ queryClient, requestGateway }: ModelControlsO
         }
 
         updateModelOptionsCache(liveSessionId, prevProvider, prevModel, touchesPrimary && !liveSessionId)
-        notifyError(err, copy.modelSwitchFailed)
+      }
 
-        return false
+      // No live session yet: the pick is pure UI state. session.create reads
+      // $currentModel/$currentProvider and applies it as that session's override.
+      if (!liveSessionId) {
+        return true
+      }
+
+      const switchEpoch = (modelSwitchEpochsRef.current.get(liveSessionId) ?? 0) + 1
+      modelSwitchEpochsRef.current.set(liveSessionId, switchEpoch)
+      const isLatestSwitch = () => modelSwitchEpochsRef.current.get(liveSessionId) === switchEpoch
+
+      const performSwitch = async (): Promise<boolean> => {
+        try {
+          const result = await requestGateway<ModelSwitchResponse>('config.set', {
+            ...(selection.confirmExpensiveModel && { confirm_expensive_model: true }),
+            session_id: liveSessionId,
+            key: 'model',
+            value: `${selection.model} --provider ${selection.provider} --session`
+          })
+
+          // A newer click owns both the optimistic UI and any confirmation.
+          // Requests are serialized below so the newer backend write still
+          // runs after this stale response, preserving last-selection-wins.
+          if (!isLatestSwitch()) {
+            return false
+          }
+
+          if (result?.confirm_required) {
+            rollback()
+            setPendingModelConfirmation({
+              message: result.confirm_message || result.warning || 'This model has unusually high known pricing.',
+              selection: { ...selection, confirmExpensiveModel: true }
+            })
+
+            return false
+          }
+
+          if (result?.ok === false) {
+            rollback()
+            notifyError(new Error(result.error || result.warning || copy.modelSwitchFailed), copy.modelSwitchFailed)
+
+            return false
+          }
+
+          void queryClient.invalidateQueries({ queryKey: ['model-options', liveSessionId] })
+
+          return true
+        } catch (err) {
+          if (isLatestSwitch()) {
+            rollback()
+            notifyError(err, copy.modelSwitchFailed)
+          }
+
+          return false
+        }
+      }
+
+      const precedingSwitch = modelSwitchQueuesRef.current.get(liveSessionId) ?? Promise.resolve()
+      const switchPromise = precedingSwitch.catch(() => undefined).then(performSwitch)
+
+      const queueTail = switchPromise.then(
+        () => undefined,
+        () => undefined
+      )
+
+      modelSwitchQueuesRef.current.set(liveSessionId, queueTail)
+
+      try {
+        return await switchPromise
+      } finally {
+        if (modelSwitchQueuesRef.current.get(liveSessionId) === queueTail) {
+          modelSwitchQueuesRef.current.delete(liveSessionId)
+          modelSwitchEpochsRef.current.delete(liveSessionId)
+        }
       }
     },
     [copy.modelSwitchFailed, queryClient, requestGateway, updateModelOptionsCache]
   )
 
-  return { refreshCurrentModel, selectModel, updateModelOptionsCache }
+  const cancelModelConfirmation = useCallback(() => setPendingModelConfirmation(null), [])
+
+  const confirmPendingModelSelection = useCallback(async () => {
+    if (!pendingModelConfirmation) {
+      return
+    }
+
+    const accepted = await selectModel(pendingModelConfirmation.selection)
+
+    if (!accepted) {
+      throw new Error(copy.modelSwitchFailed)
+    }
+  }, [copy.modelSwitchFailed, pendingModelConfirmation, selectModel])
+
+  return {
+    cancelModelConfirmation,
+    confirmPendingModelSelection,
+    pendingModelConfirmation,
+    refreshCurrentModel,
+    selectModel,
+    updateModelOptionsCache
+  }
 }

@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/dialog'
 import { useI18n } from '@/i18n'
 import { AlertTriangle } from '@/lib/icons'
+import { cn } from '@/lib/utils'
 
 interface ConfirmDialogProps {
   open: boolean
@@ -25,6 +26,7 @@ interface ConfirmDialogProps {
   busyLabel?: string
   doneLabel?: string
   cancelLabel?: string
+  contentClassName?: string
   destructive?: boolean
   /** Close as soon as onConfirm resolves — for optimistic actions that finish in the background. */
   dismissOnConfirm?: boolean
@@ -43,6 +45,7 @@ export function ConfirmDialog({
   busyLabel,
   doneLabel,
   cancelLabel,
+  contentClassName,
   destructive = false,
   dismissOnConfirm = false
 }: ConfirmDialogProps) {
@@ -95,7 +98,7 @@ export function ConfirmDialog({
   return (
     <Dialog onOpenChange={value => !value && !busy && onClose()} open={open}>
       <DialogContent
-        className="max-w-md"
+        className={cn('max-w-md', contentClassName)}
         onKeyDown={event => {
           // Enter/Space confirm regardless of which button holds focus
           // (preventDefault stops a focused Cancel from swallowing it).

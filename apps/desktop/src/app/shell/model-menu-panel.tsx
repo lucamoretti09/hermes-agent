@@ -49,6 +49,8 @@ import { ModelEditSubmenu, resolveFastControl } from './model-edit-submenu'
 export const ModelMenuCloseContext = createContext<() => void>(() => {})
 
 export interface ModelSelection {
+  /** Set only after the user accepts the backend's expensive-model warning. */
+  confirmExpensiveModel?: boolean
   model: string
   provider: string
   /** Runtime id of the surface that opened the menu. When set, the switch
