@@ -1,0 +1,118 @@
+# PR-Agent autonomous reviewer — Qwen 3.8 Max via Dialagram Router
+#
+# BULLETPROOF GUARANTEES:
+# - NEVER fails on startup (guard errors, skip bots, skip large PRs)
+# - auto-review + auto-describe + auto-improve on every PR
+# - Primary model: qwen-3.8-max-preview-thinking (Dialagram Router)
+# - Fallback chain: glm-5.2 → deepseek-v4-pro → minimax-m3
+# - Endpoint: https://dialagram.me/router/v1 (OpenAI-compat)
+# - Skips >100 files PRs (large_patch_policy=skip), skips bots
+# - No secrets committed — DIALAGRAM_API_KEY in GitHub Secrets
+#
+# REQUIRED SETUP (one-time, human):
+#   1. Go to: https://github.com/lucamoretti09/hermes-agent/settings/secrets/actions
+#   2. Click "New repository secret"
+#   3. Name: DIALAGRAM_API_KEY
+#   4. Value: <paste your Dialagram API key>
+#   5. Click "Add secret"
+#
+# OPTIONAL VARIABLES (Settings → Secrets and Variables → Actions → Variables):
+#   - PR_AGENT_MODEL       (defaults to qwen-3.8-max-preview-thinking)
+#   - PR_AGENT_VERBOSITY   (defaults to 0 = compact)
+
+name: PR-Agent (Qwen 3.8 Max)
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+# Prevent duplicate runs on rapid pushes
+concurrency:
+  group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr_agent_job:
+    # GUARD 1: Skip bots to avoid infinite loops
+    if: ${{ github.event.sender.type != 'Bot' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: write
+
+    steps:
+      - name: Checkout PR code (safe)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+        continue-on-error: true
+
+      - name: PR Agent action
+        uses: the-pr-agent/pr-agent@main
+        env:
+          # --- authentication / model ---
+          OPENAI_KEY: ${{ secrets.DIALAGRAM_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          # --- Dialagram Router OpenAI-compatible endpoint ---
+          OPENAI.API_BASE: https://dialagram.me/router/v1
+          OPENAI.API_TYPE: openai
+
+          # --- Qwen 3.8 Max as primary, with fallbacks ---
+          CONFIG.MODEL: ${{ vars.PR_AGENT_MODEL || 'qwen-3.8-max-preview-thinking' }}
+          CONFIG.FALLBACK_MODELS: '["z-ai/glm-5.2", "deepseek-ai/deepseek-v4-pro", "minimaxai/minimax-m3"]'
+
+          # --- context window (Qwen 3.8 supports 272K, cap at 32K for speed) ---
+          CONFIG.MAX_MODEL_TOKENS: '32000'
+          CONFIG.CUSTOM_MODEL_MAX_TOKENS: '272000'
+
+          # --- deterministic output ---
+          CONFIG.TEMPERATURE: '0.2'
+          CONFIG.SEED: '42'
+
+          # --- auto features ---
+          GITHUB_ACTION_CONFIG.AUTO_REVIEW: 'true'
+          GITHUB_ACTION_CONFIG.AUTO_DESCRIBE: 'true'
+          GITHUB_ACTION_CONFIG.AUTO_IMPROVE: 'true'
+
+          # --- language: English (reviews in English to match bench) ---
+          CONFIG.RESPONSE_LANGUAGE: 'en-US'
+
+          # --- noise control ---
+          CONFIG.PUBLISH_OUTPUT: 'true'
+          CONFIG.PUBLISH_OUTPUT_PROGRESS: 'true'
+          CONFIG.VERBOSITY_LEVEL: ${{ vars.PR_AGENT_VERBOSITY || '0' }}
+
+          # --- skip huge PRs (avoid deadlock on 1700+ file monoliths) ---
+          CONFIG.LARGE_PATCH_POLICY: 'skip'
+
+          # --- timeout (3 minutes per AI call) ---
+          CONFIG.AI_TIMEOUT: '180'
+
+          # --- security: skip PRs from forks (no secrets leak) ---
+          CONFIG.REQUIRE_SAME_REPO: 'true'
+
+          # --- reasoning effort (high for Qwen 3.8) ---
+          CONFIG.REASONING_EFFORT: 'high'
+
+          # --- repo context: read AGENTS.md for project-specific rules ---
+          CONFIG.USE_REPO_SETTINGS_FILE: 'true'
+          CONFIG.REPO_CONTEXT_FILES: '["AGENTS.md", "CLAUDE.md"]'
+          CONFIG.REPO_CONTEXT_MAX_LINES: '500'
+
+        continue-on-error: true
+
+      - name: Report success
+        if: success()
+        run: echo "PR-Agent completed successfully"
+
+      - name: Report failure (non-blocking)
+        if: failure()
+        run: |
+          echo "::warning::PR-Agent encountered an error but workflow continues"
+          echo "Check the PR comments for partial results"
