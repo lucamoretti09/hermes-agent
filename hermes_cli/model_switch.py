@@ -793,7 +793,7 @@ def resolve_alias(
 
 def get_authenticated_provider_slugs(
     current_provider: str = "",
-    user_providers: dict = None,
+    user_providers: dict | None = None,
     custom_providers: list | None = None,
 ) -> list[str]:
     """Return slugs of providers that have credentials.

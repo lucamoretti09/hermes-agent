@@ -144,12 +144,19 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
       // Queue drains carry their source session explicitly. A background drain
       // must never inherit the currently selected session after the user moves
       // to another chat.
-      const targetStoredSessionId = options?.storedSessionId ?? selectedStoredSessionIdRef.current
+      const hasExplicitRuntimeTarget = options?.sessionId !== undefined
+      const hasExplicitStoredTarget = options?.storedSessionId !== undefined
+
+      const targetStoredSessionId = hasExplicitStoredTarget
+        ? (options?.storedSessionId ?? null)
+        : selectedStoredSessionIdRef.current
 
       const targetStartedInCurrentView =
         !targetStoredSessionId || targetStoredSessionId === selectedStoredSessionIdRef.current
 
-      let sessionId: null | string = options?.sessionId ?? activeSessionIdRef.current
+      let sessionId: null | string = hasExplicitRuntimeTarget
+        ? (options?.sessionId ?? null)
+        : activeSessionIdRef.current
 
       // Pin the foreground session context for the whole async submit pipeline.
       // Without this, a fast session switch during session.resume / file.attach
@@ -296,7 +303,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
       // outranks a stale render-time runtime id (often from the previous
       // profile): force the full routed resume path below. An explicit queued
       // runtime id (background drain) is authoritative and is left untouched.
-      if (!options?.sessionId && routedSessionNeedsResume) {
+      if (!hasExplicitRuntimeTarget && routedSessionNeedsResume) {
         sessionId = null
       }
 
