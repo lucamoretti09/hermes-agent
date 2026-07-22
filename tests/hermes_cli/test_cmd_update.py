@@ -1106,6 +1106,7 @@ class TestNodeRuntimeNpmResolution:
         import hermes_constants
 
         monkeypatch.setattr(hm, "_is_windows", lambda: False)
+        monkeypatch.setattr(hm.os, "pathsep", ":")
         monkeypatch.setenv(
             "PATH", "/mnt/c/Program Files/nodejs:/root/.local/bin:/usr/bin"
         )
@@ -1131,6 +1132,7 @@ class TestNodeRuntimeNpmResolution:
         import hermes_constants
 
         monkeypatch.setattr(hm, "_is_windows", lambda: False)
+        monkeypatch.setattr(hm.os, "pathsep", ":")
         monkeypatch.setenv("PATH", "/mnt/c/Program Files/nodejs:/usr/bin")
 
         def fake_which(cmd, path=None):
@@ -1214,6 +1216,7 @@ class TestNodeRuntimeNpmResolution:
 
         windows_npm = "/mnt/c/Program Files/nodejs/npm"
         monkeypatch.setattr(hm, "_is_windows", lambda: False)
+        monkeypatch.setattr(hm.os, "pathsep", ":")
         monkeypatch.setattr(hermes_constants, "is_wsl", lambda: True)
         monkeypatch.setattr(
             hermes_constants,
