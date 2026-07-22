@@ -2497,6 +2497,50 @@ def _seed_custom_pool(pool_key: str, entries: List[PooledCredential]) -> Tuple[b
                     },
                 )
 
+        env_file = load_env()
+
+        def _get_env_prefer_dotenv(env_name: str) -> str:
+            raw = str(env_file.get(env_name, "") or "").strip()
+            env_value = str(os.environ.get(env_name, "") or "").strip()
+            if raw.startswith("op://") and env_value:
+                return env_value
+            return raw or _get_secret(env_name, "") or env_value
+
+        env_names: List[str] = []
+        primary_env = cp_config.get("key_env") or cp_config.get("api_key_env")
+        if isinstance(primary_env, str) and primary_env.strip():
+            env_names.append(primary_env.strip())
+        extra_env = cp_config.get("extra_keys_env")
+        if isinstance(extra_env, list):
+            for candidate in extra_env:
+                if isinstance(candidate, str) and candidate.strip():
+                    env_names.append(candidate.strip())
+
+        for env_name in dict.fromkeys(env_names):
+            token = _get_env_prefer_dotenv(env_name)
+            if not token:
+                continue
+            source = f"env:{env_name}"
+            if _is_suppressed(pool_key, source):
+                continue
+            active_sources.add(source)
+            payload: Dict[str, Any] = {
+                "source": source,
+                "auth_type": AUTH_TYPE_API_KEY,
+                "access_token": token,
+                "base_url": base_url,
+                "label": env_name,
+            }
+            try:
+                from hermes_cli.env_loader import get_secret_source
+
+                secret_source = get_secret_source(env_name)
+            except Exception:
+                secret_source = None
+            if secret_source:
+                payload["secret_source"] = str(secret_source).strip()
+            changed |= _upsert_entry(entries, pool_key, source, payload)
+
     # Seed from model.api_key if model.provider=='custom' and model.base_url matches
     try:
         config = _load_config_safe()
@@ -2570,7 +2614,11 @@ def load_pool(provider: str) -> CredentialPool:
         # Custom endpoint pool — seed from custom_providers config and model config
         custom_changed, custom_sources = _seed_custom_pool(provider, entries)
         changed = raw_needs_sanitization or raw_needs_auth_normalization or custom_changed
-        changed |= _prune_stale_seeded_entries(entries, custom_sources)
+        changed |= _prune_stale_seeded_entries(
+            entries,
+            custom_sources,
+            prune_env_sources=False,
+        )
     else:
         singleton_changed, singleton_sources = _seed_from_singletons(provider, entries)
         env_changed, env_sources = _seed_from_env(provider, entries)

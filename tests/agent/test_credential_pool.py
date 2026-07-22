@@ -2073,6 +2073,55 @@ def test_custom_endpoint_pool_seeds_from_config(tmp_path, monkeypatch):
     assert entries[0].source == "config:Together.ai"
 
 
+def test_custom_endpoint_pool_seeds_and_rotates_multiple_env_keys_without_persisting_values(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    _write_auth_store(tmp_path, {"version": 1})
+    env_names = [f"DIALAGRAM_API_KEY_{index:02d}" for index in range(1, 5)]
+    tokens = [f"fixture-dialagram-token-{index}" for index in range(1, 5)]
+    for env_name, token in zip(env_names, tokens):
+        monkeypatch.setenv(env_name, token)
+
+    import yaml
+
+    config_path = tmp_path / "hermes" / "config.yaml"
+    config_path.write_text(yaml.dump({
+        "custom_providers": [{
+            "name": "Dialagram Router",
+            "base_url": "https://dialagram.me/router/v1",
+            "key_env": env_names[0],
+            "extra_keys_env": env_names[1:],
+        }],
+        "credential_pool_strategies": {
+            "custom:dialagram-router": "fill_first",
+        },
+    }))
+
+    from agent.credential_pool import load_pool
+
+    pool = load_pool("custom:dialagram-router")
+    assert [entry.runtime_api_key for entry in pool.entries()] == tokens
+    assert [entry.source for entry in pool.entries()] == [
+        f"env:{env_name}" for env_name in env_names
+    ]
+
+    selected = [pool.select().runtime_api_key]
+    for _ in range(3):
+        next_entry = pool.mark_exhausted_and_rotate(status_code=429)
+        assert next_entry is not None
+        selected.append(next_entry.runtime_api_key)
+    assert selected == tokens
+
+    auth_text = (tmp_path / "hermes" / "auth.json").read_text()
+    assert all(token not in auth_text for token in tokens)
+    persisted = json.loads(auth_text)["credential_pool"]["custom:dialagram-router"]
+    assert len(persisted) == 4
+    assert all("access_token" not in entry for entry in persisted)
+    assert all(str(entry.get("secret_fingerprint", "")).startswith("sha256:") for entry in persisted)
+
+
 def test_custom_endpoint_pool_seeds_from_model_config(tmp_path, monkeypatch):
     """Verify seeding from model.api_key when model.provider=='custom' and base_url matches."""
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))

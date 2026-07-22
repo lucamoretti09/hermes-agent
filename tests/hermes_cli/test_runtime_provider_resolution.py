@@ -2615,6 +2615,26 @@ class TestProviderEntryApiKeyEnvAlias:
         from hermes_cli.config import _VALID_CUSTOM_PROVIDER_FIELDS
         assert "key_env" in _VALID_CUSTOM_PROVIDER_FIELDS
 
+    def test_extra_key_envs_are_normalized_and_preserved(self):
+        from hermes_cli.config import (
+            _VALID_CUSTOM_PROVIDER_FIELDS,
+            _custom_provider_entry_to_provider_config,
+            _normalize_custom_provider_entry,
+        )
+        entry = {
+            "name": "vendor",
+            "base_url": "https://api.vendor.example.com/v1",
+            "key_env": "VENDOR_KEY_01",
+            "extraKeysEnv": ["VENDOR_KEY_02", "VENDOR_KEY_03", "VENDOR_KEY_02", ""],
+        }
+        normalized = _normalize_custom_provider_entry(dict(entry), provider_key="vendor")
+        assert normalized is not None
+        assert normalized["extra_keys_env"] == ["VENDOR_KEY_02", "VENDOR_KEY_03"]
+        converted = _custom_provider_entry_to_provider_config(entry, provider_key="vendor")
+        assert converted is not None
+        assert converted["extra_keys_env"] == ["VENDOR_KEY_02", "VENDOR_KEY_03"]
+        assert "extra_keys_env" in _VALID_CUSTOM_PROVIDER_FIELDS
+
     def test_extra_body_is_supported_schema(self):
         from hermes_cli.config import (
             _VALID_CUSTOM_PROVIDER_FIELDS,

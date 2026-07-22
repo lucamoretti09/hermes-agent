@@ -5003,6 +5003,7 @@ def _normalize_custom_provider_entry(
         "apiMode": "api_mode",
         "keyEnv": "key_env",
         "apiKeyEnv": "key_env",  # alias — OpenClaw-compatible + docs variant
+        "extraKeysEnv": "extra_keys_env",
         "defaultModel": "default_model",
         "contextLength": "context_length",
         "rateLimitDelay": "rate_limit_delay",
@@ -5019,6 +5020,7 @@ def _normalize_custom_provider_entry(
         # configs don't warn on every load.
         "provider",
         "name", "api", "url", "base_url", "api_key", "key_env", "api_key_env",
+        "extra_keys_env",
         "api_mode", "transport", "model", "default_model", "models",
         "context_length", "rate_limit_delay",
         "request_timeout_seconds", "stale_timeout_seconds",
@@ -5095,6 +5097,18 @@ def _normalize_custom_provider_entry(
     key_env = entry.get("key_env")
     if isinstance(key_env, str) and key_env.strip():
         normalized["key_env"] = key_env.strip()
+
+    extra_keys_env = entry.get("extra_keys_env")
+    if isinstance(extra_keys_env, list):
+        normalized_extra_keys_env = []
+        for item in extra_keys_env:
+            if not isinstance(item, str) or not item.strip():
+                continue
+            env_name = item.strip()
+            if env_name not in normalized_extra_keys_env:
+                normalized_extra_keys_env.append(env_name)
+        if normalized_extra_keys_env:
+            normalized["extra_keys_env"] = normalized_extra_keys_env
 
     api_mode = entry.get("api_mode") or entry.get("transport")
     if isinstance(api_mode, str) and api_mode.strip():
@@ -5187,6 +5201,7 @@ def _custom_provider_entry_to_provider_config(
         "name",
         "api_key",
         "key_env",
+        "extra_keys_env",
         "models",
         "context_length",
         "rate_limit_delay",
@@ -5563,7 +5578,7 @@ _VALID_CUSTOM_PROVIDER_FIELDS = {
     "ssl_ca_cert", "ssl_verify",
     # key_env is read at runtime by runtime_provider.py and auxiliary_client.py
     # — include it here so the set accurately describes the supported schema.
-    "key_env",
+    "key_env", "extra_keys_env",
 }
 
 # Fields that look like they should be inside custom_providers, not at root
