@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { test } from 'vitest'
+import { afterAll, test, vi } from 'vitest'
 
 import {
   addWorktree,
@@ -15,6 +15,12 @@ import {
   sanitizeBranch,
   switchBranch
 } from './git-worktree-ops'
+
+// These are real filesystem/Git integration tests. Antivirus and Windows file
+// locking can make a correct multi-command case exceed Vitest's 5 s unit-test
+// default, especially when the complete Desktop suite is active.
+vi.setConfig({ testTimeout: 15_000 })
+afterAll(() => vi.resetConfig())
 
 test('sanitizeBranch: spaces → hyphens, forbidden chars dropped, edges trimmed', () => {
   assert.equal(sanitizeBranch('beach vibes'), 'beach-vibes')

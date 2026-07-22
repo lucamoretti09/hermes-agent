@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { FallbackModelsField } from './fallback-models-field'
+
 // Radix Select calls scrollIntoView / pointer-capture APIs jsdom lacks.
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn()
@@ -30,8 +32,7 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-async function renderField(value: unknown, onChange = vi.fn()) {
-  const { FallbackModelsField } = await import('./fallback-models-field')
+function renderField(value: unknown, onChange = vi.fn()) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
 
   render(
@@ -43,8 +44,7 @@ async function renderField(value: unknown, onChange = vi.fn()) {
   return onChange
 }
 
-async function renderFieldWithRerender(value: unknown, onChange = vi.fn()) {
-  const { FallbackModelsField } = await import('./fallback-models-field')
+function renderFieldWithRerender(value: unknown, onChange = vi.fn()) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
 
   const view = render(

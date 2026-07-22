@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import fs from 'node:fs'
+import os from 'node:os'
 
 // Bridges WSL/POSIX paths into forms the *Windows host* can open, for the case
 // where the desktop UI runs on Windows and the gateway runs inside WSL (remote
@@ -62,27 +62,24 @@ export function resolveDefaultWslDistro(): string {
   return cachedDistro
 }
 
-// `\\wsl.localhost\<distro>` (Win11 / Win10 >= 21364) with a `\\wsl$\<distro>`
-// fallback for older builds. Probed once; defaults to wsl.localhost.
+// `\\wsl.localhost\<distro>` is available on Win11 / Win10 >= 21364; older
+// builds use `\\wsl$\<distro>`. Select from the Windows build number instead
+// of probing a UNC path synchronously — an unavailable network provider can
+// otherwise block Electron's main process for several seconds.
+export function wslUncHostForWindowsRelease(release: string): 'wsl$' | 'wsl.localhost' {
+  const build = Number(/^\d+\.\d+\.(\d+)/.exec(release)?.[1])
+
+  return Number.isFinite(build) && build < 21364 ? 'wsl$' : 'wsl.localhost'
+}
+
 function wslUncBase(distro: string): string {
   if (cachedUncBase) {
     return cachedUncBase
   }
 
-  const modern = `\\\\wsl.localhost\\${distro}`
-  const legacy = `\\\\wsl$\\${distro}`
+  const host = IS_WINDOWS ? wslUncHostForWindowsRelease(os.release()) : 'wsl.localhost'
 
-  try {
-    if (!fs.existsSync(modern) && fs.existsSync(legacy)) {
-      cachedUncBase = legacy
-
-      return cachedUncBase
-    }
-  } catch {
-    // Network-path probe failed — prefer the modern form.
-  }
-
-  cachedUncBase = modern
+  cachedUncBase = `\\\\${host}\\${distro}`
 
   return cachedUncBase
 }

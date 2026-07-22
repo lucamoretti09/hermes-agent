@@ -2,7 +2,12 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
-import { parseDefaultDistro, resolvePickerDefaultPath, wslPosixToWindowsAccessible } from './wsl-path-bridge'
+import {
+  parseDefaultDistro,
+  resolvePickerDefaultPath,
+  wslPosixToWindowsAccessible,
+  wslUncHostForWindowsRelease
+} from './wsl-path-bridge'
 
 test('parseDefaultDistro reads the first distro from clean utf-8 output', () => {
   assert.equal(parseDefaultDistro('Ubuntu\nDebian\n'), 'Ubuntu')
@@ -18,6 +23,13 @@ test('parseDefaultDistro survives UTF-16LE NUL bytes older wsl.exe leaves in (WS
 test('parseDefaultDistro strips the default-marker and blank lines', () => {
   assert.equal(parseDefaultDistro('\n* Ubuntu\nDebian\n'), 'Ubuntu')
   assert.equal(parseDefaultDistro('   \n\n'), null)
+})
+
+test('wslUncHostForWindowsRelease selects the non-blocking UNC form by Windows build', () => {
+  assert.equal(wslUncHostForWindowsRelease('10.0.19045'), 'wsl$')
+  assert.equal(wslUncHostForWindowsRelease('10.0.21364'), 'wsl.localhost')
+  assert.equal(wslUncHostForWindowsRelease('10.0.26100'), 'wsl.localhost')
+  assert.equal(wslUncHostForWindowsRelease('unknown'), 'wsl.localhost')
 })
 
 test('wslPosixToWindowsAccessible maps a drvfs mount to its Windows drive', () => {

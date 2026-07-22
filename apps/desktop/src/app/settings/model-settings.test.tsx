@@ -3,6 +3,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { ModelSettings } from './model-settings'
+
 // Radix Select calls scrollIntoView on its items when the content opens; jsdom
 // doesn't implement it (nor hasPointerCapture / releasePointerCapture), so stub
 // them to let the dropdown open in tests.
@@ -84,8 +86,7 @@ afterEach(() => {
   profileSwitchHandler = null
 })
 
-async function renderModelSettings() {
-  const { ModelSettings } = await import('./model-settings')
+function renderModelSettings() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
 
   return render(

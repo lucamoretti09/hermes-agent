@@ -1,8 +1,10 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { atom } from 'nanostores'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { EnvVarInfo, OAuthProvider } from '@/types/hermes'
+
+import type { ProvidersSettings as ProvidersSettingsExport } from './providers-settings'
 
 const listOAuthProviders = vi.fn()
 const disconnectOAuthProvider = vi.fn()
@@ -10,6 +12,7 @@ const getEnvVars = vi.fn()
 const startManualProviderOAuth = vi.fn()
 const startManualLocalEndpoint = vi.fn()
 const onboarding = atom({ manual: false })
+let ProvidersSettings: typeof ProvidersSettingsExport
 
 vi.mock('@/hermes', () => ({
   disconnectOAuthProvider: (providerId: string) => disconnectOAuthProvider(providerId),
@@ -22,6 +25,12 @@ vi.mock('@/store/onboarding', () => ({
   startManualProviderOAuth: (providerId: string) => startManualProviderOAuth(providerId),
   startManualLocalEndpoint: (reason: null | string) => startManualLocalEndpoint(reason)
 }))
+
+beforeAll(async () => {
+  const module = await import('./providers-settings')
+
+  ProvidersSettings = module.ProvidersSettings
+})
 
 function provider(id: string, loggedIn: boolean, patch: Partial<OAuthProvider> = {}): OAuthProvider {
   return {
@@ -73,35 +82,25 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-async function renderProvidersSettings() {
-  const { ProvidersSettings } = await import('./providers-settings')
-  let result: ReturnType<typeof render>
-  await act(async () => {
-    result = render(<ProvidersSettings onClose={vi.fn()} onViewChange={vi.fn()} view="accounts" />)
-  })
-
-  return result!
+function renderProvidersSettings() {
+  return render(<ProvidersSettings onClose={vi.fn()} onViewChange={vi.fn()} view="accounts" />)
 }
 
 describe('ProvidersSettings', () => {
   it('disconnects a connected provider account and refreshes the accounts list', async () => {
-    await renderProvidersSettings()
+    renderProvidersSettings()
 
     const remove = await screen.findByRole('button', { name: 'Remove Nous Portal' })
-    await act(async () => {
-      fireEvent.click(remove)
-    })
+    fireEvent.click(remove)
 
     await waitFor(() => expect(disconnectOAuthProvider).toHaveBeenCalledWith('nous'))
     expect(listOAuthProviders).toHaveBeenCalledTimes(2)
   })
 
   it('keeps provider selection separate from account removal', async () => {
-    await renderProvidersSettings()
+    renderProvidersSettings()
 
-    await act(async () => {
-      fireEvent.click(await screen.findByText('Nous Portal'))
-    })
+    fireEvent.click(await screen.findByText('Nous Portal'))
 
     expect(startManualProviderOAuth).toHaveBeenCalledWith('nous')
     expect(disconnectOAuthProvider).not.toHaveBeenCalled()
@@ -120,7 +119,7 @@ describe('ProvidersSettings', () => {
       ]
     })
 
-    await renderProvidersSettings()
+    renderProvidersSettings()
 
     expect(await screen.findByText('Qwen Code')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Remove Qwen Code' })).toBeNull()
@@ -141,10 +140,7 @@ describe('ProvidersSettings', () => {
     })
     listOAuthProviders.mockResolvedValue({ providers: [] })
 
-    const { ProvidersSettings } = await import('./providers-settings')
-    await act(async () => {
-      render(<ProvidersSettings onClose={vi.fn()} onViewChange={vi.fn()} view="keys" />)
-    })
+    render(<ProvidersSettings onClose={vi.fn()} onViewChange={vi.fn()} view="keys" />)
 
     expect(await screen.findByText('WidgetAI')).toBeTruthy()
   })
@@ -160,7 +156,6 @@ describe('ProvidersSettings', () => {
     })
     listOAuthProviders.mockResolvedValue({ providers: [] })
 
-    const { ProvidersSettings } = await import('./providers-settings')
     render(<ProvidersSettings onClose={vi.fn()} onViewChange={vi.fn()} view="keys" />)
 
     // Equal priority → alphabetical tiebreak: Acme, Middle, Zebra.
@@ -170,18 +165,14 @@ describe('ProvidersSettings', () => {
 
     // Typing narrows the list to matching providers only.
     const search = screen.getByPlaceholderText('Search providers…')
-    await act(async () => {
-      fireEvent.change(search, { target: { value: 'mid' } })
-    })
+    fireEvent.change(search, { target: { value: 'mid' } })
 
     await waitFor(() => expect(screen.queryByText('Acme')).toBeNull())
     expect(screen.getByText('Middle')).toBeTruthy()
     expect(screen.queryByText('Zebra')).toBeNull()
 
     // A non-matching query shows the empty-state copy.
-    await act(async () => {
-      fireEvent.change(search, { target: { value: 'nonesuch-xyz' } })
-    })
+    fireEvent.change(search, { target: { value: 'nonesuch-xyz' } })
     expect(await screen.findByText('No providers match your search.')).toBeTruthy()
   })
 
@@ -193,7 +184,6 @@ describe('ProvidersSettings', () => {
     getEnvVars.mockResolvedValue({})
     listOAuthProviders.mockResolvedValue({ providers: [] })
 
-    const { ProvidersSettings } = await import('./providers-settings')
     render(<ProvidersSettings onClose={vi.fn()} onViewChange={vi.fn()} view="keys" />)
 
     const row = await screen.findByText('Local / custom endpoint')

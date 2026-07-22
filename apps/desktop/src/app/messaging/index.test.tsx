@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { MessagingPlatformInfo } from '@/types/hermes'
+
+import { MessagingView } from './index'
 
 const getMessagingPlatforms = vi.fn()
 const updateMessagingPlatform = vi.fn()
@@ -51,18 +53,12 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-async function renderMessaging() {
-  const { MessagingView } = await import('./index')
-  let result: ReturnType<typeof render>
-  await act(async () => {
-    result = render(
-      <MemoryRouter>
-        <MessagingView />
-      </MemoryRouter>
-    )
-  })
-
-  return result!
+function renderMessaging() {
+  return render(
+    <MemoryRouter>
+      <MessagingView />
+    </MemoryRouter>
+  )
 }
 
 describe('MessagingView setup-guide link', () => {
@@ -73,7 +69,7 @@ describe('MessagingView setup-guide link', () => {
     // simply not appear when there is no guide to open.
     getMessagingPlatforms.mockResolvedValue({ platforms: [platform({ docs_url: '' })] })
 
-    await renderMessaging()
+    renderMessaging()
 
     expect((await screen.findAllByText('Microsoft Teams')).length).toBeGreaterThan(0)
     expect(screen.queryByText('Open setup guide')).toBeNull()
@@ -83,12 +79,10 @@ describe('MessagingView setup-guide link', () => {
     const docsUrl = 'https://hermes-agent.nousresearch.com/docs/user-guide/messaging/teams'
     getMessagingPlatforms.mockResolvedValue({ platforms: [platform({ docs_url: docsUrl })] })
 
-    await renderMessaging()
+    renderMessaging()
 
     const link = await screen.findByText('Open setup guide')
-    await act(async () => {
-      fireEvent.click(link)
-    })
+    fireEvent.click(link)
 
     await waitFor(() => expect(openExternalLink).toHaveBeenCalledWith(docsUrl))
   })

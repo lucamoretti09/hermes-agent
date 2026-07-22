@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { MemoryProviderConfig } from '@/types/hermes'
 
+import { ProviderConfigPanel } from './provider-config-panel'
+
 const getMemoryProviderConfig = vi.fn()
 const saveMemoryProviderConfig = vi.fn()
 
@@ -108,9 +110,7 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-async function renderPanel(provider = 'honcho') {
-  const { ProviderConfigPanel } = await import('./provider-config-panel')
-
+function renderPanel(provider = 'honcho') {
   return render(<ProviderConfigPanel provider={provider} />)
 }
 
