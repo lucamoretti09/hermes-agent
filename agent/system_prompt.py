@@ -323,6 +323,18 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     if skills_prompt:
         stable_parts.append(skills_prompt)
 
+    # Crystallized procedures — high-confidence lessons learned from past sessions.
+    # Stable for the lifetime of the process (loaded once from state.db at prompt
+    # build time, cached alongside the rest of the stable prompt). Must never
+    # break the prompt cache or raise during assembly.
+    try:
+        from agent.prompt_builder import build_crystals_prompt
+        _crystals = build_crystals_prompt(limit=10)
+        if _crystals:
+            stable_parts.append(_crystals)
+    except Exception:
+        pass  # Crystal retrieval failure must never block prompt build.
+
     # Alibaba Coding Plan API always returns "glm-4.7" as model name regardless
     # of the requested model. Inject explicit model identity into the system prompt
     # so the agent can correctly report which model it is (workaround for API bug).

@@ -2075,3 +2075,60 @@ def build_context_files_prompt(
     if not sections:
         return ""
     return "# Project Context\n\nThe following project context files have been loaded and should be followed:\n\n" + "\n".join(sections)
+
+
+def build_crystals_prompt(limit: int = 10) -> str:
+    """Build a prompt section with relevant skill crystals from state.db.
+    
+    Retrieves the highest-confidence crystallized procedures and injects them
+    into the system prompt so the agent can leverage proven approaches.
+    
+    Returns empty string if no crystals exist or retrieval fails.
+    """
+    try:
+        import sqlite3
+        from hermes_constants import get_hermes_home
+        
+        state_db = get_hermes_home() / "state.db"
+        if not state_db.exists():
+            return ""
+        
+        conn = sqlite3.connect(str(state_db))
+        cur = conn.cursor()
+        
+        # Check if table exists
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='skill_crystals'")
+        if not cur.fetchone():
+            conn.close()
+            return ""
+        
+        # Get top crystals by confidence
+        cur.execute(
+            "SELECT skill_name, trigger_condition, procedure_steps_json, confidence "
+            "FROM skill_crystals ORDER BY confidence DESC LIMIT ?",
+            (limit,)
+        )
+        rows = cur.fetchall()
+        conn.close()
+        
+        if not rows:
+            return ""
+        
+        import json
+        lines = ["# Crystallized Procedures (Proven Approaches)\n"]
+        lines.append("These are high-confidence procedures learned from past sessions. Apply them when relevant:\n")
+        
+        for skill_name, trigger, steps_json, confidence in rows:
+            steps = json.loads(steps_json) if steps_json else []
+            lines.append(f"\n**{skill_name}** (confidence: {confidence:.2f})")
+            lines.append(f"Trigger: {trigger[:100]}...")
+            if steps and isinstance(steps, list):
+                lines.append("Steps:")
+                for i, step in enumerate(steps[:5], 1):  # Cap at 5 steps
+                    lines.append(f"  {i}. {step}")
+        
+        return "\n".join(lines)
+        
+    except Exception as e:
+        logger.warning(f"Failed to build crystals prompt: {e}")
+        return ""
