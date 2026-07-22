@@ -56,7 +56,7 @@ jobs:
         uses: the-pr-agent/pr-agent@main
         env:
           # --- authentication / model ---
-          OPENAI_KEY: ${{ secrets.DIALAGRAM_API_KEY }}
+          OPENAI_KEY: ${{ secrets.DIALAGRAM_API_KEY_01 }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
           # --- Dialagram Router OpenAI-compatible endpoint ---
