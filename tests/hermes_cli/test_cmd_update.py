@@ -71,6 +71,16 @@ def _patch_managed_uv(request):
         yield
 
 
+@pytest.fixture(autouse=True)
+def _isolate_live_windows_update_processes(monkeypatch):
+    """Keep mocked update tests independent from the running Hermes install."""
+    from hermes_cli import main as hm
+
+    monkeypatch.setattr(hm, "_detect_concurrent_hermes_instances", lambda _scripts_dir: [])
+    monkeypatch.setattr(hm, "_detect_venv_python_processes", lambda: [])
+    monkeypatch.setattr(hm, "_pause_windows_gateways_for_update", lambda: [])
+
+
 class TestCmdUpdateNpmLockfileCache:
     @staticmethod
     def _cache_file(hermes_root, project_root):
@@ -455,10 +465,8 @@ class TestCmdUpdateBranchFallback:
         import subprocess as _subprocess
         build_ok = _subprocess.CompletedProcess([], 0, stdout="", stderr="")
         with patch.object(hm, "_is_termux_env", return_value=False), \
-             patch.object(hm, "_detect_concurrent_hermes_instances", return_value=[]), \
-             patch.object(hm, "_detect_venv_python_processes", return_value=[]), \
-             patch.object(hm, "_pause_windows_gateways_for_update", return_value=[]), \
              patch.object(hm, "_resolve_node_runtime_npm", return_value="/usr/bin/npm"), \
+             patch.object(hm, "_web_ui_build_needed", return_value=True), \
              patch.object(hm, "_run_with_idle_timeout", return_value=build_ok) as mock_idle:
             cmd_update(mock_args)
 
